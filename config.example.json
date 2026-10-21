@@ -1,0 +1,7 @@
+{
+  "_about": "Example of the shared config the harness writes to $HARNESS_HOME/_harness/config.json on setup. Copy only what you want to change; defaults live in harness.py.",
+  "project_aliases": {"old-project-name": "current-project-name"},
+  "allowed_roots": ["~/Claude/Projects"],
+  "idle_wake_projects": [],
+  "auto_reload": false
+}

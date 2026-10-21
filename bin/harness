@@ -1,0 +1,12 @@
+#!/bin/sh
+# Launcher for the harness CLI. Usage: harness <subcommand> ...   (try: harness roster, harness serve, harness pending)
+# Finds the repo from this file's location (follows symlinks), so it works from any directory.
+# HARNESS_HOME is the shared folder holding the ledger and corpus; default ~/Claude/Projects/Exchange.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in /*) SELF="$LINK" ;; *) SELF="$(dirname "$SELF")/$LINK" ;; esac
+done
+REPO="$(cd "$(dirname "$SELF")/.." && pwd)"
+HARNESS_HOME="${HARNESS_HOME:-$HOME/Claude/Projects/Exchange}"; export HARNESS_HOME
+exec python3 "$REPO/plugins/crew-coordinator/scripts/harness.py" "$@"
