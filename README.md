@@ -16,6 +16,6 @@ git clone https://github.com/Braindono/hatstand.git && cd hatstand
 
 `setup.sh` checks for Python 3.8+ and SQLite FTS5, creates the shared folder (default `~/Claude/Projects/Exchange`, or `--home PATH`), writes the default config there, and prints the remaining steps: add this repo as a Claude Code marketplace (`/plugin marketplace add <repo path>`), install the plugins from `harness-local`, and set `HARNESS_HOME`. It never overwrites existing config or data, and can be re-run. `bin/harness` is the CLI launcher (`harness roster`, `harness serve`, `harness pending`, `harness approve <id>`); `bin/wake.py` is the pass-the-ball wake registry. `config.example.json` shows the settings you can override.
 
-Known gap: three tests in the crew-coordinator suite depend on files outside this repo (the corpus indexer and its pin, and a project digests folder), so they fail on a clean checkout; the other 322 pass.
+Known gap: three tests in the crew-coordinator suite depend on files outside this repo (the corpus indexer and its pin, and a project digests folder), so they fail on a clean checkout; of 325 tests, 321 pass and 1 is skipped.
 
 Not included: the live ledger (`events.jsonl`), the decision corpus, registry and operator config. These are runtime data, not source. Pure Python 3.8+ standard library; no dependencies.
