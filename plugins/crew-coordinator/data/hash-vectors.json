@@ -1,0 +1,84 @@
+[
+ {
+  "event": {
+   "v": 1,
+   "seq": 1,
+   "ts": "2026-10-13T08:00:00.000Z",
+   "t": 1790000000.0,
+   "type": "t.empty",
+   "actor": "human",
+   "data": {},
+   "prev": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "canonical": "{\"actor\":\"human\",\"data\":{},\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"seq\":1,\"t\":1790000000.0,\"ts\":\"2026-10-13T08:00:00.000Z\",\"type\":\"t.empty\",\"v\":1}",
+  "hash": "ab8bbf17088418b46153f459be0adc9d584de00ad53be20deab8a116e3e27552"
+ },
+ {
+  "event": {
+   "v": 1,
+   "seq": 2,
+   "ts": "2026-10-13T08:00:01.250Z",
+   "t": 1790000001.25,
+   "type": "t.nested",
+   "actor": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "data": {
+    "b": [
+     3,
+     2,
+     1
+    ],
+    "a": {
+     "z": null,
+     "y": true,
+     "x": false
+    },
+    "n": 0,
+    "neg": -7
+   },
+   "prev": "x"
+  },
+  "canonical": "{\"actor\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"data\":{\"a\":{\"x\":false,\"y\":true,\"z\":null},\"b\":[3,2,1],\"n\":0,\"neg\":-7},\"prev\":\"x\",\"seq\":2,\"t\":1790000001.25,\"ts\":\"2026-10-13T08:00:01.250Z\",\"type\":\"t.nested\",\"v\":1}",
+  "hash": "61ead120a2e5d63fea3390f77ab26ba4ca75bc141d37e1ba1655d7f2e10c3b2a"
+ },
+ {
+  "event": {
+   "v": 1,
+   "seq": 3,
+   "ts": "2026-10-13T08:00:02.001Z",
+   "t": 1790000002.001,
+   "type": "t.unicode",
+   "actor": "system",
+   "data": {
+    "s": "café ◆ → ✓ 日本",
+    "q": "a\"b\\c\nd\te",
+    "emoji": "😀"
+   },
+   "prev": "y"
+  },
+  "canonical": "{\"actor\":\"system\",\"data\":{\"emoji\":\"😀\",\"q\":\"a\\\"b\\\\c\\nd\\te\",\"s\":\"café ◆ → ✓ 日本\"},\"prev\":\"y\",\"seq\":3,\"t\":1790000002.001,\"ts\":\"2026-10-13T08:00:02.001Z\",\"type\":\"t.unicode\",\"v\":1}",
+  "hash": "703385892dd20778ceaf50b2da20ec80328ba3ec8abb9a0a45f6edc7a4d5ae20"
+ },
+ {
+  "event": {
+   "v": 1,
+   "seq": 4,
+   "ts": "2026-10-13T08:00:03.100Z",
+   "t": 1790000003.1,
+   "type": "t.float",
+   "actor": "human",
+   "data": {
+    "f": 0.1,
+    "g": 1e-07,
+    "h": 123456789.125,
+    "i": 1.0
+   },
+   "prev": "z",
+   "via": {
+    "t": "cli",
+    "v": "0.14.6"
+   }
+  },
+  "canonical": "{\"actor\":\"human\",\"data\":{\"f\":0.1,\"g\":1e-07,\"h\":123456789.125,\"i\":1.0},\"prev\":\"z\",\"seq\":4,\"t\":1790000003.1,\"ts\":\"2026-10-13T08:00:03.100Z\",\"type\":\"t.float\",\"v\":1,\"via\":{\"t\":\"cli\",\"v\":\"0.14.6\"}}",
+  "hash": "690045fd7f9894d9be1f5f1ef5d36d4d4d0aa4b24bd1079dfc10809dc79395d3"
+ }
+]

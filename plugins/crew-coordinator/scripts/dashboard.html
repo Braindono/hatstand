@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crew Coordinator</title>
+<style>
+:root{--bg:#f7f6f3;--panel:#fff;--ink:#1d1d1b;--mute:#6b6a66;--line:#e4e2dc;--accent:#2f6f8f;--ok:#2e7d4f;--warn:#b26a00;--bad:#b3261e;--chip:#eef3f6;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--panel:#1d1d1b;--ink:#eceae4;--mute:#9a988f;--line:#2e2d2a;--accent:#7fb6d1;--ok:#6fcf97;--warn:#f2b35b;--bad:#f28b82;--chip:#233038}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:2}
+h1{font-size:16px;margin:0;letter-spacing:.2px}h1 small{color:var(--mute);font-weight:400}
+.badges{display:flex;gap:8px;flex-wrap:wrap}.badge{font:12px var(--mono);padding:3px 8px;border-radius:99px;border:1px solid var(--line)}
+.b-ok{color:var(--ok)}.b-bad{color:var(--bad)}.b-warn{color:var(--warn)}
+nav{display:flex;gap:4px;padding:8px 16px;flex-wrap:wrap}nav button{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px 12px;border-radius:8px;cursor:pointer}
+nav button.on{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+main{padding:8px 16px 40px;max-width:1200px;margin:0 auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.sob{font-weight:650;font-size:15px}.hash{font:12px var(--mono);color:var(--mute)}
+.chip{display:inline-block;background:var(--chip);border-radius:6px;padding:1px 7px;font-size:12px;margin:2px 4px 0 0}
+.st-active{color:var(--ok)}.st-idle{color:var(--warn)}.st-retired,.st-superseded{color:var(--mute)}
+.mute{color:var(--mute)}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;color:var(--mute);font-weight:600}
+td.mono,.mono{font:12px var(--mono)}
+.thread{margin-bottom:14px}.msg{border-left:2px solid var(--line);padding:6px 10px;margin:4px 0}
+.msg .meta{font-size:12px;color:var(--mute)}.msg .body{white-space:pre-wrap}
+.k-task,.k-handoff{border-left-color:var(--accent)}.k-result{border-left-color:var(--ok)}.k-review{border-left-color:var(--warn)}
+.loop{color:var(--warn);font-size:12px}.scroll{overflow-x:auto}
+input[type=search]{padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);min-width:220px}
+.empty{padding:30px;text-align:center;color:var(--mute)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Crew Coordinator <small id="home"></small></h1>
+  <div class="badges" id="badges"></div>
+</header>
+<nav id="tabs"></nav>
+<main id="view"></main>
+<script>
+const SNAPSHOT = /*__SNAPSHOT__*/null;
+let S = SNAPSHOT, tab = "ledger", filter = "";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const short = id => id ? String(id).slice(0,8) : "";
+const nm = id => (S.agents.find(a => a.id === id)||{}).sobriquet || short(id);
+const ago = iso => { const s = (Date.now()-new Date(iso))/1000; return s<60?`${s|0}s ago`:s<3600?`${s/60|0}m ago`:s<86400?`${s/3600|0}h ago`:`${s/86400|0}d ago`; };
+const TABS = {ledger:"Ledger", threads:"Threads", assets:"Leases & versions", events:"Event log"};
+
+function badges(){
+  const v = S.verify, act = S.agents.filter(a=>a.status==="active").length;
+  $("#home").textContent = S.home;
+  $("#badges").innerHTML =
+    `<span class="badge ${v.ok?'b-ok':'b-bad'}">chain ${v.ok?'verified':'BROKEN'} · ${v.events} events</span>`+
+    `<span class="badge">${act} active / ${S.agents.length} agents</span>`+
+    `<span class="badge">${S.leases.length} leases</span>`+
+    (()=>{const live=(S.servers||[]).filter(x=>!x.stopped), st=live.filter(x=>x.stale).length;
+      return `<span class="badge ${st?'b-bad':''}" title="${live.map(x=>esc(x.host+':'+x.pid+' v'+x.version)).join(', ')}">${live.length} server(s)${st?` · ${st} stale`:''}</span>`})()+
+    `<span class="badge b-warn" title="Flagged for replacement. See docs/BACKEND.md">backend: ${esc(S.backend)} (${esc(S.backend_status)})</span>`+
+    (SNAPSHOT ? `<span class="badge">snapshot ${esc(S.generated)}</span>` : `<a class="badge" href="/export.jsonl" download>export .jsonl</a>`);
+}
+function nav(){
+  $("#tabs").innerHTML = Object.entries(TABS).map(([k,v])=>`<button class="${k===tab?'on':''}" data-t="${k}">${v}</button>`).join("")+
+    `<input type="search" id="q" placeholder="filter…" value="${esc(filter)}">`;
+  document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{tab=b.dataset.t;render()});
+  $("#q").oninput = e => { filter = e.target.value.toLowerCase(); draw(); };
+}
+const match = o => !filter || JSON.stringify(o).toLowerCase().includes(filter);
+
+function ledger(){
+  const order = {active:0, idle:1, superseded:2, retired:3};
+  const rows = S.agents.filter(match).sort((a,b)=>(order[a.status]-order[b.status])||(b.spawned_t-a.spawned_t));
+  if(!rows.length) return `<div class="empty">No agents registered yet.</div>`;
+  return `<div class="grid">`+rows.map(a=>`<div class="card">
+    <div class="sob">◆ ${esc(a.sobriquet)}</div>
+    <div class="hash">#${short(a.id)} · <span class="st-${a.status}">${a.status}</span> · ${esc(a.surface||"")}</div>
+    <div style="margin-top:6px">${esc(a.expertise||"(expertise pending)")} <span class="mute">[${a.expertise_status}]</span></div>
+    ${a.task?`<div class="mute">task: ${esc(a.task)}</div>`:""}
+    <div style="margin-top:6px">
+      ${a.predecessor?`<span class="chip">↑ ${esc(nm(a.predecessor))}</span>`:""}
+      ${a.successor?`<span class="chip">↓ ${esc(nm(a.successor))}</span>`:""}
+      ${(a.groups||[]).map(g=>`<span class="chip">group:${esc(g)}</span>`).join("")}
+      ${a.unread?`<span class="chip">✉ ${a.unread} unread</span>`:""}
+    </div>
+    <div class="mute" style="font-size:12px;margin-top:6px">${esc(a.project||"")} · spawned ${ago(a.spawned_at)} · seen ${ago(a.last_seen_iso)}</div>
+  </div>`).join("")+`</div>`;
+}
+
+function threads(){
+  const byId = Object.fromEntries(S.messages.map(m=>[m.id,m]));
+  const ths = S.threads.slice().sort((a,b)=>b.last.localeCompare(a.last)).filter(t=>match(t)||t.messages.some(id=>match(byId[id])));
+  if(!ths.length) return `<div class="empty">No messages yet.</div>`;
+  return ths.map(t=>{
+    const msgs = t.messages.map(id=>byId[id]);
+    const depth = {}; msgs.forEach(m=>depth[m.id] = m.parent && depth[m.parent]!=null ? depth[m.parent]+1 : 0);
+    const senders = msgs.map(m=>m.from); const loops = senders.length - new Set(senders).size;
+    const branches = msgs.filter(m=>msgs.filter(c=>c.parent===m.id).length>1).length;
+    return `<div class="card thread">
+      <div><b>${esc(t.subject||"(no subject)")}</b> <span class="hash">${esc(t.id)}</span></div>
+      <div class="mute" style="font-size:12px">${t.participants.map(nm).map(esc).join(" · ")} · ${msgs.length} msgs · max hop ${Math.max(...msgs.map(m=>m.hop))}/${t.max_hops}
+        ${branches?` · <span class="loop">⑂ ${branches} branch point(s)</span>`:""}${loops?` · <span class="loop">↻ revisits: ${loops}</span>`:""}</div>
+      ${msgs.map(m=>`<div class="msg k-${m.kind}" style="margin-left:${Math.min(depth[m.id],8)*18}px">
+        <div class="meta"><b>${esc(m.from_name)}</b> → ${m.to_names.map(esc).join(", ")} · ${m.kind}${m.task_state?` [${m.task_state}]`:""} · hop ${m.hop} · ${esc(m.ts)} · <span class="mono">${m.id}</span>
+        ${m.read_names.length?` · read by ${m.read_names.map(esc).join(", ")}`:""}</div>
+        <div class="body">${esc(m.body)}</div>
+        ${(m.refs||[]).length?`<div>${m.refs.map(r=>`<span class="chip mono">${esc(r)}</span>`).join("")}</div>`:""}
+      </div>`).join("")}
+    </div>`}).join("");
+}
+
+function assets(){
+  const L = S.leases.filter(match), V = S.versions.filter(match).slice().reverse();
+  return `<h3>Active leases</h3>`+(L.length?`<div class="scroll"><table><tr><th>Path</th><th>Holder</th><th>Intent</th><th>Expires</th><th>Lease</th></tr>`+
+    L.map(l=>`<tr><td class="mono">${esc(l.path)}</td><td>${esc(l.holder_name)}</td><td>${esc(l.intent||"")}</td><td>${l.expires_in_s}s</td><td class="mono">${l.lease_id}</td></tr>`).join("")+`</table></div>`:`<div class="empty">No active leases.</div>`)+
+    `<h3>Version history</h3>`+(V.length?`<div class="scroll"><table><tr><th>Path</th><th>v</th><th>By</th><th>When</th><th>SHA</th><th>Note</th></tr>`+
+    V.map(v=>`<tr><td class="mono">${esc(v.path)}</td><td>${v.version}</td><td>${esc(v.by_name)}</td><td>${esc(v.ts)}</td><td class="mono">${esc((v.sha||"").slice(0,10))}</td><td>${esc(v.note||"")}</td></tr>`).join("")+`</table></div>`:`<div class="empty">No versions recorded.</div>`);
+}
+
+function events(){
+  const E = S.events.filter(match).slice().reverse();
+  const probs = S.verify.problems.length?`<div class="card b-bad">Chain problems: ${S.verify.problems.map(p=>esc(JSON.stringify(p))).join("<br>")}</div>`:"";
+  return probs+`<div class="scroll"><table><tr><th>#</th><th>Time</th><th>Type</th><th>Actor</th><th>Data</th><th>Hash ← prev</th></tr>`+
+    E.map(e=>`<tr><td>${e.seq}</td><td class="mono">${esc(e.ts)}</td><td>${esc(e.type)}</td><td>${esc(nm(e.actor))}</td>
+      <td class="mono" style="max-width:420px;word-break:break-word">${esc(JSON.stringify(e.data)).slice(0,300)}</td>
+      <td class="mono">${e.hash.slice(0,10)} ← ${String(e.prev).slice(0,10)}</td></tr>`).join("")+`</table></div>
+      <p class="mute">Showing the latest ${S.events.length} events. Full log: _harness/events.jsonl</p>`;
+}
+
+function draw(){ $("#view").innerHTML = ({ledger,threads,assets,events})[tab](); }
+function render(){ if(!S) return; badges(); nav(); draw(); }
+async function poll(){
+  try{ const r = await fetch("/api/state",{cache:"no-store"}); if(r.ok){ S = await r.json(); badges(); draw(); } }catch(e){}
+}
+// 0.15.1: every POST from this page must send the per-run token (served as a meta tag); none are used on this view today
+const CSRF = (document.querySelector('meta[name="csrf-token"]')||{}).content || "";
+function postJSON(url, body){ return fetch(url,{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":CSRF},body:JSON.stringify(body)}); }
+if(SNAPSHOT){ render(); } else { poll().then(()=>{ render(); setInterval(poll, 2000); }); }
+</script>
+</body>
+</html>

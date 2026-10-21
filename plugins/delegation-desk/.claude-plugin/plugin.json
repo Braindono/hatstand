@@ -1,0 +1,9 @@
+{
+  "name": "delegation-desk",
+  "version": "0.4.1",
+  "author": {
+    "name": "Brian"
+  },
+  "license": "MIT",
+  "description": "How agents delegate: cheap ephemeral subagents for mechanical work and role-addressed tickets. Skills only; needs harness-router >=0.6.0."
+}

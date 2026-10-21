@@ -1,0 +1,9 @@
+{
+  "name": "excellent-etiquette",
+  "version": "0.2.7",
+  "description": "Operator etiquette preferences as skills: communication, autonomy, delegation, plugins, continuity, cv-writing, design; plus /swarm, /argue, /song.",
+  "author": {
+    "name": "skill-curation"
+  },
+  "license": "MIT"
+}

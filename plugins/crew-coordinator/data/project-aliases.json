@@ -1,0 +1,15 @@
+{
+  "_about": "Project alias map applied by harness_record at write time (keys are compared after norm_project). The harness-ops cutover may add entries; history is never rewritten.",
+  "aliases": {
+    "orchestration": "orchestration",
+    "cv-management": "cv-management",
+    "code": "claude-code",
+    "claude": "claude-code",
+    "design-system": "design-system",
+    "lucent-design-system": "design-system",
+    "skill-curation": "skill-curation",
+    "harness-router": "skill-curation",
+    "harness_router": "skill-curation",
+    "claude-code": "claude-code"
+  }
+}

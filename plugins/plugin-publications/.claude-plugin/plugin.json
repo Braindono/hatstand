@@ -1,0 +1,9 @@
+{
+  "name": "plugin-publications",
+  "version": "0.8.3",
+  "author": {
+    "name": "Brian"
+  },
+  "license": "MIT",
+  "description": "Home of /list, /new-skill and /upgrade. Curate, package, and lint Harness plugins and skills (formerly plugin-press, skill-foundry)."
+}

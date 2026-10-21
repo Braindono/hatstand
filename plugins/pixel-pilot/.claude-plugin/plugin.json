@@ -1,0 +1,9 @@
+{
+  "name": "pixel-pilot",
+  "version": "0.2.1",
+  "description": "Design work: critique, design system, dev handoff, UX copy, accessibility (WCAG AA), research plans and synthesis. Use for /design or any of these.",
+  "author": {
+    "name": "skill-curation (derived from Anthropic design 1.2.0)"
+  },
+  "license": "Apache-2.0"
+}
