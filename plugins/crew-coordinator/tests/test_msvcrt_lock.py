@@ -1,4 +1,7 @@
 """cc 0.14.1: Windows lock path with a mocked msvcrt (real test happens later on a PC). Run: python3 -B tests/test_msvcrt_lock.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import os, sys, tempfile, threading, types, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))

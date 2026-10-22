@@ -1,6 +1,9 @@
 """cc 0.14.6 Wave 1 hardening: steps 1-10 (lease.expired, aliases, refs, hosts, history report, legacy gate,
 check_reason, release verdict, torn tail, proof fail-closed, bad events, anchors, hash vectors, H-003).
 Run: python3 -B tests/test_hardening_w1.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, shutil, subprocess, sys, tempfile, unittest
 from unittest import mock
 
@@ -92,7 +95,7 @@ class Aliases(Base):               # step 2
 
     def test_live_projects_known_and_scratch_wildcard(self):
         a = self.h.register(project="orchestration", model=MODEL)["id"]
-        for given, want in (("Harness_Router", "skill-curation"), ("Lucent Design System", "design-system"),
+        for given, want in (("Skill_Curation", "skill-curation"), ("Lucent Design System", "design-system"),
                             ("design-system", "design-system"), ("scratch-abc", "scratch-abc"), ("code", "claude-code")):
             self.h.record(a, "note", f"rec {given}", project=given)
             self.assertEqual(self.types("corpus.recorded")[-1]["data"]["project"], want, given)

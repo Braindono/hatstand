@@ -89,7 +89,7 @@ One MCP server process can serve several chats (cloud sessions linked through th
 
 ## 0.15.1 Wave 2
 
-**Pinned corpus_index.py.** The S5 proof check and the corpus check run `projects/orchestration/scripts/corpus_index.py` with `python3 -I`, and only when its sha256 (first 12 hex) and the digest of `rules/*.py` (files not starting with `_`) match the pin. The built-in default is a bootstrap default (pinned at install; the envoy sets the pin with pin_corpus_index after its ACCEPT); `harness_admin op=pin_corpus_index {sha, rules, ref}` writes a `corpus_index.pinned` event (corpus-envoy directly; others get an approval request). `/health` shows `corpus_index.py pin ok` or a `▲` mismatch row.
+**Pinned corpus_index.py.** The S5 proof check and the corpus check run `projects/orchestration/scripts/corpus_index.py` with `python3 -I`, and only when its sha256 (first 12 hex) and the digest of `rules/*.py` (files not starting with `_`) match the pin. The built-in default is a bootstrap default (pinned at install; the envoy sets the pin with pin_corpus_index after its ACCEPT); `harness_admin op=pin_corpus_index {sha, rules, ref}` writes a `corpus_index.pinned` event (envoy directly; others get an approval request). `/health` shows `corpus_index.py pin ok` or a `▲` mismatch row.
 
 **Dashboard.** `harness.py serve` binds loopback only. Every request must carry a loopback `Host`; every POST needs the per-run `X-CSRF-Token` (embedded in the served pages) and a matching `Origin` if present; bodies are limited to 64 KiB; responses carry frame, sniff, referrer, cache and CSP headers. `/operator` lists pending approvals with Approve and Deny; type the 4-character code (shown beside the row) into the field. Events log channel `dashboard`.
 

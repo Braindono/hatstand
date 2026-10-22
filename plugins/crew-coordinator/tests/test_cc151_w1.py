@@ -1,5 +1,8 @@
 """cc 0.15.1 Wave 1: server-bound identity, operator-spoof refusal, curation roles, approval requests, gate integrity.
 Run: python3 -B tests/test_cc151_w1.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, sys, tempfile, time, unittest
 from unittest import mock
 
@@ -274,6 +277,8 @@ class Approvals(Base):
         seen["role_assign"] = self.adm("role_assign", a, role="writer-role", target=a)
         seen["set_project"] = self.adm("set_project", a, target=a, project="orch2")
         seen["idle_wake"] = self.adm("idle_wake", a, project="orch", on=True)
+        self.agent(project="other-p")    # makes "other-p" a known project for the retag request
+        seen["retag_operator"] = self.adm("retag", a, entry=n, project="other-p")
         seen["corpus_index_pin"] = self.adm("pin_corpus_index", a, sha="a" * 12, rules="b" * 12, ref="m-" + "c" * 12)
         self.as_(c)
         seen["task_update_other"] = self.adm("task_update", c, task_id=tid, state="working")

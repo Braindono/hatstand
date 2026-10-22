@@ -1,6 +1,9 @@
 """cc 0.15.0 audit fixes: path containment, symlink-free package/hash, file modes, untrusted-text hygiene,
 corpus front-matter escaping, body/max_hops clamps, publish cleanup (unique .prev/.stage, failures reported).
 Run: python3 -B tests/test_audit_fixes.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, shutil, stat, sys, tempfile, unittest
 from unittest import mock
 

@@ -1,5 +1,8 @@
 """LADDER (droppable) tests: inbox discipline and listening ladder. Delete with scripts/inbox_ladder.py to drop it.
 Run: python3 -B tests/test_inbox_ladder.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))

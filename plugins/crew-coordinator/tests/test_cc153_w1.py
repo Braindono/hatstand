@@ -1,5 +1,8 @@
 """cc 0.15.3 Wave 1: project-folder resolver (E), registry path portability (D), brief_hosts (C), robustness (A / P7).
 Run: python3 -B tests/test_cc153_w1.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import hashlib, io, json, os, sys, tempfile, unittest
 from unittest import mock
 

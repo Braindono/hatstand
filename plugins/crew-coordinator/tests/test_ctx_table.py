@@ -1,4 +1,7 @@
 """cc 0.14.4: ctx hook table, model x surface (D-5d771, amended D-8ee87). Run: python3 -B tests/test_ctx_table.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, sys, tempfile, unittest, uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))

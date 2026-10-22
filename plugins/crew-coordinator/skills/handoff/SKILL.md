@@ -8,7 +8,7 @@ description: Transfer ownership via an Exchange capsule. Use for "handoff", "new
 ## 1. One call (harness tools available)
 1. Fill `Exchange/templates/HANDOFF.template.md` per its HOW TO FILL: keep §0 and `status: open` (only the successor sets `accepted`); `project:` required; ≤1500 tokens (chars/4), ids and one-line gists, next action first. The server stamps `model:` if missing.
 2. Call `harness_handoff agent=<your id> capsule_md=<the markdown text, or the path of a capsule file you already wrote> state_note="Next: … | Open: … | Verified: … | Chat: …"` once. It writes the capsule, commits, records, sends the handoff and returns the bootstrap. Over 1500 tokens is rejected: trim and retry.
-3. If the result says `Idle-wake disarmed: call delete_trigger(...)`, make that call (never list_triggers).
+3. If the result says `Idle-wake disarmed: call update_trigger(...)`, make that call (it disables the wake; never delete scheduled tasks).
 4. Reply with only the returned bootstrap line in a fenced block, e.g.:
 
 ```

@@ -167,6 +167,15 @@ class Corpus:
                 for old in d0.get("ids") or []:
                     self.db.execute("UPDATE entries SET superseded_by='archived' WHERE id=?", (old,))
                 continue
+            if t == "corpus.retagged":  # 0.15.5 (WP3): the latest retag by seq sets project (and role when given); never touches pin/archive
+                rid, np_, by_ = d0.get("id"), d0.get("new_project"), d0.get("by")
+                if isinstance(rid, str) and rid and isinstance(np_, str) and np_.strip() and isinstance(by_, str) and by_.strip():
+                    nr = d0.get("new_role")
+                    if isinstance(nr, str) and nr.strip():
+                        self.db.execute("UPDATE entries SET project=?, role=? WHERE id=? AND source='log'", (np_.strip(), nr.strip(), rid))
+                    else:
+                        self.db.execute("UPDATE entries SET project=? WHERE id=? AND source='log'", (np_.strip(), rid))
+                continue
             if t == "corpus.unarchived":  # v2: back into search; expiry rule restored from the event
                 exp = d0.get("expires") or {}
                 for pid in d0.get("ids") or []:
@@ -193,6 +202,15 @@ class Corpus:
         self._meta("last_seq", head)
         self._index_files()
         self.db.commit()
+
+    def entry_meta(self, entry_id):
+        """0.15.5 (WP3): {id, kind, project, role, agent, archived, pinned} for a logged entry (archived included), or None."""
+        self.refresh()
+        r = self.db.execute("SELECT id, kind, project, role, agent, superseded_by, tags FROM entries WHERE id=? AND source='log'", (entry_id,)).fetchone()
+        if not r:
+            return None
+        return {"id": r[0], "kind": r[1], "project": r[2] or "", "role": r[3] or "", "agent": r[4],
+                "archived": r[5] == "archived", "pinned": "pin" in (r[6] or "").split()}
 
     def _index_files(self):
         seen = set()

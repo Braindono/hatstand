@@ -1,5 +1,5 @@
 {
-  "_about": "Project alias map applied by harness_record at write time (keys are compared after norm_project). The harness-ops cutover may add entries; history is never rewritten.",
+  "_about": "Project alias map applied by harness_record at write time (keys are compared after norm_project). harness-router is deprecated and has no entry. orchestration and skill-curation keep their own slug here: their records and agents carry that project, and the harness-ops cutover maps them to the harness-ops folder through _alias/alias-map.json. History is never rewritten.",
   "aliases": {
     "orchestration": "orchestration",
     "cv-management": "cv-management",
@@ -8,8 +8,7 @@
     "design-system": "design-system",
     "lucent-design-system": "design-system",
     "skill-curation": "skill-curation",
-    "harness-router": "skill-curation",
-    "harness_router": "skill-curation",
-    "claude-code": "claude-code"
+    "claude-code": "claude-code",
+    "harness-ops": "harness-ops"
   }
 }

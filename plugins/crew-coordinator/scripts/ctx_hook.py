@@ -31,9 +31,10 @@ CTX_TABLE = {
     "claude-haiku": {"silent": True, "window": {"code": 200000, "chat": 200000, "cowork": 200000}},
 }
 COLD_S = 3600
-STEWARD = "[scheduled] corpus-steward pass"
+STEWARD = ("[scheduled] corpus-steward pass", "[scheduled] steward pass")   # 0.16.0: both prompts (the schedule is renamed later)
 DIRTY_TOOLS = ("harness_send", "harness_commit", "harness_claim", "harness_record")
 WAKE = "[idle-handoff]"
+LISTEN = "/listen"
 IDLE_MIN = 55
 ROLE_UNSET_LINE = "Role unset: propose a one-line role, ask the operator to confirm, then harness_admin op=set_expertise."
 NOTE_LINE = "State changed: add state_note= to your next harness call."
@@ -95,18 +96,90 @@ def home_cfg():
         return {}
 
 
-def surface(path=None):
-    """code | chat | cowork | unknown. Code only when positively identified (HARNESS_SURFACE=code or a
-    Claude Code transcript path); unknown gets the smallest window (m-fdfde0867a47)."""
+_DESKTOP_HOME = re.compile(r"^/(?:Users|home)/([^/]+)/\.claude/projects/")
+
+
+def surface_src(path=None):
+    """-> (surface, source); source is explicit | path | unknown. Explicit HARNESS_SURFACE always wins.
+    0.15.5 (WP1.1): "code" by path only under a desktop user home (/Users/<name>/.claude/projects/ or
+    /home/<name>/.claude/projects/, name not "claude"). Cloud paths (/root/.claude/..., /sessions/...) and any
+    other path that merely contains /.claude/projects/ are "unknown" (smallest window of the model row)."""
     s = (os.environ.get("HARNESS_SURFACE") or "").strip().lower()
     if s in SURFACES:
-        return s
+        return s, "explicit"
     p = str(path or "").replace("\\", "/")
     if "/local-agent-mode-sessions/" in p:
-        return "cowork"
-    if "/.claude/projects/" in p:
-        return "code"
-    return "unknown"
+        return "cowork", "path"
+    m = _DESKTOP_HOME.match(p)
+    if m and m.group(1) != "claude":
+        return "code", "path"
+    return "unknown", "unknown"
+
+
+def surface(path=None):
+    """code | chat | cowork | unknown (see surface_src)."""
+    return surface_src(path)[0]
+
+
+PRECOMPACT_PREFIX = "harness-precompact-"
+_SID_OK = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def precompact_stub(sid, agent, role, trigger, now=None):
+    """0.15.5 (WP1.4, curator ruling m-2f799cf488db): marker + one-line stub in the per-user state dir only.
+    Temp file then os.link (never overwrites), unique per session and call, no ledger call. -> path or None
+    (fail open: any error returns None). The next harness_sync/register turns it into a role-state record."""
+    try:
+        d = state_dir()
+        t = int(now if now is not None else time.time())
+        sid = _SID_OK.sub("", str(sid or "nosid"))[:64] or "nosid"
+        final = os.path.join(d, f"{PRECOMPACT_PREFIX}{sid}-{t}-{secrets.token_hex(3)}.json")
+        stamp = datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M")
+        rec = {"v": 1, "agent": str(agent), "role": str(role), "t": t, "trigger": str(trigger or "")[:16],
+               "stub": f"pre-compaction auto-save {stamp} ({str(trigger or 'auto')[:16]}): pending actions not captured; "
+                       "run /update, check Owes reply and unread mail, then rewrite this note."}
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=PRECOMPACT_PREFIX, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(rec, f)
+            os.chmod(tmp, 0o600)
+            os.link(tmp, final)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return final
+    except Exception as e:
+        try:
+            _log("precompact", e)
+        except Exception:
+            pass
+        return None
+
+
+def take_precompact(agent):
+    """-> list of stub records for this agent (files removed once read). Never raises."""
+    out = []
+    try:
+        d = state_dir()
+        for n in sorted(os.listdir(d)):
+            if not (n.startswith(PRECOMPACT_PREFIX) and n.endswith(".json")):
+                continue
+            p = os.path.join(d, n)
+            try:
+                rec = json.loads(read_state(p))
+            except ValueError:
+                rec = None
+            if isinstance(rec, dict) and rec.get("agent") == agent and isinstance(rec.get("stub"), str):
+                out.append(rec)
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    return out
 
 
 def _longest(table, model):
@@ -500,6 +573,8 @@ def idle_prompt(inp, t, steward):
     # F2: after handoff/supersede, a wake (or wrapper) is stale; operator prompts pass through
     if (s.get("handed_off") or s.get("superseded")) and is_wrapper(prompt):
         return 'Stale idle wake. Reply "·" and stop.'
+    if prompt.startswith(LISTEN):   # 0.15.5 (WP4): the /listen self-wake is not operator activity (never stamps idle-wake)
+        return None
     if steward:
         s["steward"] = True
         save_note(p, s)
@@ -515,27 +590,25 @@ def idle_prompt(inp, t, steward):
             last_prompt_ts = float(s.get("last_prompt_ts") or 0)
             arm_ts = float(s.get("arm_ts") or 0)
             if last_prompt_ts > arm_ts:
-                # B4-F1: Operator active since arming - re-arm once with adjusted delay
-                if not s.get("rearmed"):
-                    nonce = secrets.token_hex(3)
-                    proj = re.sub(r"[^A-Za-z0-9_.-]", "_", s.get("project") or os.path.basename(str(inp.get("cwd") or "").rstrip("/")) or "p")
-                    minutes_since = max(0, int((t - last_prompt_ts) / 60))
-                    delay = max(5, IDLE_MIN - minutes_since)
-                    s["nonce"], s["arm_ts"] = nonce, t
-                    s["rearmed"] = True
-                    save_note(p, s)
-                    return (f'Operator active since arming. Reply "·" and stop. Re-armed: alongside your next tool call, call send_later(delay_minutes={delay}, '
-                            f'name="idle-handoff {proj} {nonce}", message="{WAKE} {nonce}")')
-                s["rearmed"] = False    # A8: cycle over; the next cycle may re-arm once
+                # 0.15.5 (WP2f): a fire skipped because the operator was active re-arms itself, every time, with a fresh
+                # nonce (the old one is now stale, so timers never stack). A fire that finds the chat idle hands off and
+                # does not re-arm; a handed-off or superseded chat never reaches here (stale check above).
+                nonce = secrets.token_hex(3)
+                proj = re.sub(r"[^A-Za-z0-9_.-]", "_", s.get("project") or os.path.basename(str(inp.get("cwd") or "").rstrip("/")) or "p")
+                minutes_since = max(0, int((t - last_prompt_ts) / 60))
+                delay = max(5, IDLE_MIN - minutes_since)
+                s["nonce"], s["arm_ts"] = nonce, t
+                s["rearmed"] = True
                 save_note(p, s)
-                return 'Operator active since arming. Reply "·" and stop. Do not re-arm.'
+                return (f'Operator active since arming. Reply "·" and stop. Re-armed: alongside your next tool call, call send_later(delay_minutes={delay}, '
+                        f'name="idle-handoff {proj} {nonce}", message="{WAKE} {nonce}")')
             s["rearmed"] = False
             save_note(p, s)
             return "Idle wake. Run /handoff and stop."
         if not s.get("on") or not s.get("trig_id") or not s.get("nonce"):
             return None    # someone else's notification (mail, GitHub, reminders): pass through
         return (f'Call ReadNotifications. If a body is "{WAKE} {s["nonce"]}" and no operator prompt since arming: '
-                'run /handoff and stop. Handle any other notifications normally. Never re-arm from a wrapper.')
+                'run /handoff and stop. Handle any other notifications normally. Re-arm only when the wake is skipped because the operator was active.')
     s["last_prompt_ts"] = t
     msg = None
     if s.get("on") and not s.get("steward") and t - float(s.get("arm_ts") or 0) >= IDLE_MIN * 60:
@@ -546,15 +619,15 @@ def idle_prompt(inp, t, steward):
         msg = (f'Idle wake: alongside your next tool call, call send_later(delay_minutes={IDLE_MIN}, '
                f'name="idle-handoff {proj} {nonce}", message="{WAKE} {nonce}")')
         if armed(s, t):
-            msg += f', then delete_trigger(trigger_id="{s["trig_id"]}")'
-        msg += ". Never call list_triggers."
+            msg += f', then update_trigger(trigger_id="{s["trig_id"]}", enabled=false)'
+        msg += ". Use only the id in this chat's state file; scheduled tasks are never deleted here (the Idle-handoff cleanup runner does that)."
     save_note(p, s)
     return msg
 
 
 def idle_tool(inp, t):
     """PostToolUse idle logic (D3, D6): idle-wake on/off from responses; capture the armed send_later;
-    update_trigger/delete_trigger on the armed id clears it."""
+    update_trigger on the armed id (or a manual delete elsewhere) clears it. This code never asks for a delete (D-314f2)."""
     name = str(inp.get("tool_name") or "")
     ti = inp.get("tool_input") or {}
     if not isinstance(ti, dict):
@@ -571,7 +644,7 @@ def idle_tool(inp, t):
             s["handed_off"] = True
             s["on"] = False
             if s.get("trig_id"):
-                ret = f'Idle-wake disarmed: call delete_trigger(trigger_id="{s["trig_id"]}")'
+                ret = f'Idle-wake disarmed: call update_trigger(trigger_id="{s["trig_id"]}", enabled=false)'
                 s["trig_id"], s["fires_at"] = "", 0
             ch = True
     elif name.endswith("harness_restore"):
@@ -580,7 +653,7 @@ def idle_tool(inp, t):
             s["handed_off"] = True
             s["on"] = False
             if s.get("trig_id"):
-                ret = f'Idle-wake disarmed: call delete_trigger(trigger_id="{s["trig_id"]}")'
+                ret = f'Idle-wake disarmed: call update_trigger(trigger_id="{s["trig_id"]}", enabled=false)'
                 s["trig_id"], s["fires_at"] = "", 0
             ch = True
     txt = _text(inp.get("tool_response")) if re.search(r"harness_[a-z_]+$", name) else ""
@@ -632,6 +705,32 @@ def _has_note(ti):
     return isinstance(tags, list) and any(str(x).strip().lower().startswith("role-state") for x in tags)
 
 
+UNREAD_AGE_S = 120        # mail must be this old before the line appears
+UNREAD_EVERY_S = 600      # and the line shows at most once per this many seconds per chat
+
+
+def _unread_line(inp):
+    """0.16.0 (spec bind-send-visibility C): on a non-harness tool result, one counts-only line when the chat has unread
+    mail older than 2 minutes, at most once per 10 minutes. Reads the marker file the server keeps (no ledger replay, no
+    sender or subject text); the chat is told to run harness_inbox. Never wakes an idle chat and never polls."""
+    p = note_path(inp)
+    s = load_note(p)
+    ag = s.get("agent")
+    if not ag or s.get("steward") or not re.fullmatch(r"[0-9a-f]{8}", str(ag)):
+        return None
+    try:
+        mk = json.loads(read_state(state_path(f"harness-unread-{ag}.json")))
+        n, oldest = int(mk["n"]), float(mk["oldest"])
+    except Exception:
+        return None
+    now = time.time()
+    if n <= 0 or now - oldest < UNREAD_AGE_S or now - float(s.get("unread_shown") or 0) < UNREAD_EVERY_S:
+        return None
+    s["unread_shown"] = now
+    save_note(p, s)
+    return f"\u2709{n} unread mail for you (oldest {int((now - oldest) // 60)} min): run harness_inbox."
+
+
 def on_tool(inp):
     """PostToolUse: any harness_* call with a state note clears dirty (unless the server rejected it);
     send/commit/claim/record without one set it. Track norole from response. -> the reminder once per operator turn, or None."""
@@ -655,7 +754,7 @@ def on_tool(inp):
     
     m = re.search(r"harness_[a-z_]+", str(inp.get("tool_name") or ""))
     if not m:
-        return None
+        return _unread_line(inp)
     tool = m.group(0)
     ti = inp.get("tool_input") or {}
     if not isinstance(ti, dict):
@@ -668,6 +767,8 @@ def on_tool(inp):
     # 0.15.1 (P6): only the verified banner head of register/restore/whoami counts, never text elsewhere in a result
     bh = banner_head(inp)
     line = bh["line"] if bh else None
+    if bh:
+        s["agent"] = bh["id"][:8]      # 0.16.0: lets the unread line find this chat's marker file
     if line is not None:
         s["norole"] = bool(re.search(r"(?:^|·)\s*role unset\s*(?:·|$)", line.strip()))
     elif tool in ("harness_sync", "harness_register", "harness_restore") and any(

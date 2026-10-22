@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -22,7 +23,7 @@ S, I, B, ARR = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}, {"t
 # Rules and patterns live in the protocol skill, loaded only when needed.
 ADMIN_OPS = ["whoami", "ledger", "thread", "status", "set_expertise", "task_update", "group", "retire",
              "set_project", "roster", "role_define", "role_assign", "registry", "verify", "export", "reload", "health", "archive", "unarchive", "pin",
-             "approvals", "flag_release", "publish_release", "pin_corpus_index"]
+             "approvals", "flag_release", "publish_release", "pin_corpus_index", "retag", "listen"]
 # 0.12.1 (C-01dcf): allowed args per admin op; unknown keys are an error, never silently ignored.
 ADMIN_ARGS = {
     "whoami": set(), "ledger": {"active_only"}, "thread": {"thread"}, "status": {"path"},
@@ -39,6 +40,8 @@ ADMIN_ARGS = {
     "pin": {"ids", "off", "reason", "drafter_model", "lead_model"},
     "idle_wake": {"project", "on"},
     "pin_corpus_index": {"sha", "rules", "ref"},
+    "retag": {"entry", "project", "role", "ref", "dry_run"},
+    "listen": {"action"},
     "approvals": set(),
     "flag_release": {"name", "retired", "replaced_by", "external"},
     "publish_release": {"path", "notes", "required", "renamed_from", "pkg", "accept", "override", "build", "dry_run"},
@@ -100,7 +103,8 @@ def bind_check(h, a, tool=""):
     if mode == "warn" and (b, aid) not in _BIND_SEEN:
         _BIND_SEEN.add((b, aid))
         try:
-            h.store.append("bind.mismatch", "system", {"bound": b[:8], "agent": aid[:8], "tool": str(tool)[:40]})
+            h.store.append("bind.mismatch", "system", {"bound": b[:8], "agent": aid[:8], "tool": str(tool)[:40],
+                                                       "mode": mode, "executed": True, "bound_is": "first agent this server saw; not an authority"})
         except Exception:
             pass
 
@@ -116,14 +120,19 @@ def bound_id(h):
     return BOUND["id"] if BOUND["home"] == h.home and BOUND["id"] else "unbound"
 
 
-def caller_id(h, agent=None):
-    """0.15.2: the caller of an approval is the agent named on THIS call; the process-wide binding is only a fallback."""
+def caller_id(h, agent=None, optional=False):
+    """0.15.5 (WP2e): the caller of an approval is the agent named on THIS call, never the process-wide binding
+    (a shared-process chat could be attributed to another chat's agent). No or unknown agent= -> a clear error.
+    optional=True (harness_restore, which a chat may call before it has an agent): no agent= -> "unbound", still never the
+    process binding. Residual: agent= is self-declared, so there is no per-chat authentication (docs/BACKEND.md)."""
     if agent and isinstance(agent, str):
         try:
             return h.resolve(h.state(), agent, follow=False)
         except H.HarnessError:
             pass
-    return bound_id(h)
+    if optional and not agent:
+        return "unbound"
+    raise H.HarnessError("approval requests need agent=<your short id> (it names who is asking; no fallback)")
 
 
 def pend(h, caller, action, args):
@@ -150,10 +159,10 @@ TOOLS = [
     ("harness_register", "Register; returns banner. project required (successors inherit). successor_of after compaction. model=your exact model id from your env; pass it even if a cached schema lacks it. role=<role> for no-carry roles (auto-takes it).",
      {"expertise": S, "task": S, "project": S, "successor_of": S, "confirmed": B, "model": S, "role": S}, []),
     ("harness_sync", "/update: first line = status; then Do/Changed. ctx=your token estimate (+base= if the ctx hook gave one); full=old card; do_only=/refresh.",
-     {"agent": A, "mark": B, "ctx": I, "base": I, "full": B, "do_only": B, "state_note": S}, ["agent"]),
+     {"agent": A, "mark": B, "ctx": I, "base": I, "full": B, "do_only": B, "state_note": S, "topic": S}, ["agent"]),
     ("harness_send", "Message. to: id|name|list|role:x|group:x|*|operator. reply_to continues thread. "
                      "kind: message|task|handoff|result|question|notice|review. state_note=role state ≤1200 chars.",
-     {"agent": A, "to": S, "body": S, "subject": S, "kind": S, "reply_to": S, "refs": ARR, "state_note": S}, ["agent", "to", "body"]),
+     {"agent": A, "to": S, "body": S, "subject": S, "kind": S, "reply_to": S, "refs": ARR, "state_note": S, "topic": S}, ["agent", "to", "body"]),
     ("harness_inbox", "Unread mail. wait=secs long-poll.", {"agent": A, "wait": I}, ["agent"]),
     ("harness_claim", "Lease file(s) before editing; returns version. path may be a list (Haiku agents: max 2 files per call, P-40).", {"agent": A, "path": {"anyOf": [S, ARR]}, "intent": S, "ttl": I},
      ["agent", "path"]),
@@ -234,7 +243,7 @@ def with_note(h, a, r):
     if not n or not str(n).strip():
         return r
     try:
-        msg = h.state_note(a["agent"], str(n))
+        msg = h.state_note(a["agent"], str(n), a.get("topic"))
     except H.HarnessError as e:
         msg = f"state_note rejected: {e}"
     except Exception as e:
@@ -277,7 +286,10 @@ def admin(h, a):
         for k in ("role", "project"):
             if not x.get(k):
                 raise H.HarnessError(f"role_define: {k} required")
-        return pend(h, h.resolve(h.state(), ag, follow=False), "role_define", dict(x))
+        r_ = pend(h, h.resolve(h.state(), ag, follow=False), "role_define", dict(x))
+        if x.get("carry") == "none" and isinstance(r_, dict) and not h.role_intent(x["role"], H.norm_project(x["project"])):
+            r_ = dict(r_, warn=f"no-carry role has no projects/{H.norm_project(x['project'])}/{x['role']}/INTENT.md; add one")
+        return r_
     if op == "role_assign":
         if not x.get("role"):
             raise H.HarnessError("role_assign: role required")
@@ -322,7 +334,7 @@ def admin(h, a):
         return pend(h, caller_id(h, ag), "publish_override", {k: x[k] for k in x if x.get(k) is not None})
     if op == "health":
         return h.health_bundle(x.get("project"), x.get("agent")) if x.get("bundle") else h.health(x.get("project"), x.get("agent"))
-    if op == "archive":   # operator approval, or role corpus-steward (D-90088); reason per D-15566 P2
+    if op == "archive":   # operator approval, or role steward (D-90088); reason per D-15566 P2
         import re
         rv, ack = _review(x), x.get("ack")
         if ack is not None and not (isinstance(ack, str) and re.fullmatch(r"m-[0-9a-f]{12}", ack)):
@@ -345,6 +357,18 @@ def admin(h, a):
         if h.curation_allows(st, cid, "pin"):
             return h.pin(ag, x["ids"], not x.get("off"), x.get("reason", ""), rv)
         return pend(h, cid, "pin_operator", {"ids": _ids(x["ids"]), "on": not x.get("off"), "reason": x.get("reason", ""), "review": rv})
+    if op == "listen":   # 0.15.5 (WP4): /listen self-wake bookkeeping; the server decides, the agent claims nothing
+        import doorbell
+        return doorbell.listen(h, ag, x.get("action"))
+    if op == "retag":   # 0.15.5 (WP3): envoy / owning role / target role with a verified ref direct, else an approval request
+        for k in ("entry", "project"):
+            if not x.get(k):
+                raise H.HarnessError(f"retag: {k} required")
+        cid = h.resolve(h.state(), ag, follow=False)
+        try:
+            return h.retag(ag, x["entry"], x["project"], x.get("role"), x.get("ref"), dry_run=bool(x.get("dry_run")))
+        except H.RetagGate:
+            return pend(h, cid, "retag_operator", {"entry": x["entry"], "project": x["project"], "role": x.get("role"), "ref": x.get("ref")})
     if op == "pin_corpus_index":   # 0.15.1 (P3): envoy role direct, anyone else an approval request
         st = h.state()
         cid = h.resolve(st, ag, follow=False)
@@ -368,6 +392,22 @@ ROLE_UNSET_LINE = "Role unset: propose a one-line role, ask the operator to conf
 IDLE_WAKE_LINE = "idle-wake: on (55m)"
 
 
+def consume_precompact(h, st, cur):
+    """0.15.5 (WP1.4): turn a PreCompact stub (state dir, written by the hook for this agent or a predecessor) into a
+    role-state record under topic "precompact", so the main note is not overwritten. Fail open; -> a one-line text or None."""
+    try:
+        if not st.role_of(cur):
+            return None
+        from ctx_hook import take_precompact
+        recs = [r for aid in st.lineage(cur) for r in take_precompact(aid)]
+        if not recs:
+            return None
+        msg = h.state_note(cur, recs[-1]["stub"][:H.Harness.NOTE_MAX], "precompact")
+        return f"compaction happened: stub saved ({msg}); rewrite it with state_note topic=precompact"
+    except Exception:
+        return None
+
+
 def with_extras(h, agent, r, role_line=True):
     """hr 0.12.4 A3 + D2: append the role-unset proposal (agent holds no role) and the idle-wake line
     (agent's project is in config idle_wake_projects) to register/restore/sync text. Never raises."""
@@ -378,6 +418,9 @@ def with_extras(h, agent, r, role_line=True):
         cur = st.current(h.resolve(st, agent))
         me = st.agents.get(cur) or {}
         add = []
+        pc = consume_precompact(h, st, cur)
+        if pc:
+            add.append(pc)
         if role_line and not st.role_of(cur):
             add.append(ROLE_UNSET_LINE)
         proj = me.get("project")
@@ -426,13 +469,49 @@ def _send_key(a):
     return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
 
 
+WRITE_TOOLS = ("harness_send", "harness_record", "harness_commit", "harness_task_update", "harness_claim", "harness_handoff")
+_FAILED_SEEN = {}      # agent short id -> recent failure timestamps (rate cap)
+FAILED_PER_MIN = 3
+
+
+def _log_failed(h, name, a, err):
+    """0.16.0 (spec bind-send-visibility A): a failed write is one `call.failed` event {agent, tool, error (clean, 200),
+    to (send only)}. Never a body, title or other argument; capped at 3 per agent per minute; never raises into the call."""
+    try:
+        if name not in WRITE_TOOLS or not isinstance(a, dict):
+            return
+        ag = str(a.get("agent") or "")[:8]
+        now = time.time()
+        recent = [t for t in _FAILED_SEEN.get(ag, []) if now - t < 60]
+        if len(recent) >= FAILED_PER_MIN:
+            _FAILED_SEEN[ag] = recent
+            return
+        _FAILED_SEEN[ag] = recent + [now]
+        data = {"agent": ag, "tool": name, "error": H._clean_text(str(err), 200)}
+        if name == "harness_send" and a.get("to") is not None:
+            data["to"] = H._clean_text(str(a.get("to")), 60)
+        h.store.append("call.failed", "system", data)
+    except Exception:
+        pass
+
+
 def call(h, name, a):
+    try:
+        return _call(h, name, a)
+    except Exception as e:
+        _log_failed(h, name, a, e)
+        raise
+
+
+def _call(h, name, a):
     refuse_operator(a)       # 0.15.1: before anything else, for every tool and admin op
     if name in LEGACY_TOOLS and not legacy_enabled(h):
         raise H.HarnessError(f"{name} was retired from the tool surface: use harness_admin op={LEGACY_TOOLS[name]} "
                              "(args per the protocol skill). Temporary escape for one release: HARNESS_LEGACY_TOOLS=1 "
                              "or config legacy_tools=true.")
     bind_check(h, a, name)
+    import doorbell
+    doorbell.wake_guard(h, name, a)     # 0.15.5 (WP4): inside a /listen wake only inbox and routine coordination run
     if name == "harness_admin":
         return admin(h, a)
     if name in ("harness_task_update", "harness_retire", "harness_export"):   # legacy names go through the same gates
@@ -469,6 +548,7 @@ def call(h, name, a):
         r_ = with_note(h, a, h.send(a["agent"], a["to"], a["body"], a.get("subject"), a.get("kind", "message"), a.get("thread"),
                       a.get("reply_to"), a.get("refs"), a.get("priority", "normal"), a.get("max_hops"),
                       a.get("expects_reply", False)))
+        r_ = doorbell.attach_nudge(h, a["agent"], r_)     # 0.15.5 (WP4): ids-only nudge for the sender to push
         SEND_SEEN[key_] = (now_, r_)
         return r_
     if name == "harness_inbox":
@@ -497,15 +577,20 @@ def call(h, name, a):
         if str(a.get("tier") or "").strip().lower() == "foundation":   # envoy-only; anyone else files a request
             st = h.state()
             cid = h.resolve(st, a["agent"], follow=False)
-            if st.role_of(cid) != "corpus-envoy":
+            if st.role_of(cid) != "envoy":
                 keys = ("kind", "title", "body", "tags", "project", "refs", "supersedes", "offload", "role", "tier")
                 return pend(h, cid, "tier_foundation", {k: a.get(k) for k in keys if a.get(k) is not None})
+        for k_ in ("kind", "title"):   # 0.16.0 (spec D): a clear error, not a bare KeyError("kind")
+            if not str(a.get(k_) or "").strip():
+                raise H.HarnessError(f"harness_record: {k_} required" + (" (decision|context|capsule|note)" if k_ == "kind" else ""))
         return h.record(a["agent"], a["kind"], a["title"], a.get("body", ""), a.get("tags"), a.get("project"),
                         a.get("refs"), a.get("supersedes"), a.get("offload", False), a.get("role"), a.get("tier"))
     if name == "harness_recall":
         return h.recall(a.get("query"), a.get("ids"), a.get("kind"), a.get("tags"), a.get("project"),
                         a.get("limit", 5), a.get("budget"), a.get("include_superseded", False))
     if name == "harness_restore":
+        if isinstance(a.get("role"), str):
+            a = dict(a, role=H.cr_input(a["role"].strip()))   # 0.16.0: an old role name must not skip the holder/gate checks below
         confirmed = a.get("confirmed", False)
         auto = None
         if confirmed:   # 0.15.1: overriding a holder seen < 10 min ago is the operator's call; a dead holder changes nothing
@@ -519,8 +604,8 @@ def call(h, name, a):
                 ok_, why_, auto = h.restore_auto_check(a["role"], a.get("capsule"), a.get("project"))
                 if not ok_:
                     auto = None
-                    if not h.consume_approval(caller_id(h, a.get("agent")), "restore_confirmed", rargs):
-                        r_ = pend(h, caller_id(h, a.get("agent")), "restore_confirmed", rargs)
+                    if not h.consume_approval(caller_id(h, a.get("agent"), optional=True), "restore_confirmed", rargs):
+                        r_ = pend(h, caller_id(h, a.get("agent"), optional=True), "restore_confirmed", rargs)
                         return dict(r_, auto_confirm=f"not applied: {why_}") if isinstance(r_, dict) else r_
         r = h.restore(a["role"], a.get("model"), a.get("project"), a.get("task"), confirmed, a.get("capsule"), auto)
         if isinstance(r, dict) and r.get("short"):

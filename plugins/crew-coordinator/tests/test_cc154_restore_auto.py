@@ -1,5 +1,8 @@
 """cc 0.15.4: auto-confirm restore from a fresh capsule written by the live holder (rules 1-5 + fallbacks).
 Run: python3 -B tests/test_cc154_restore_auto.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, sys, time, unittest
 from unittest import mock
 

@@ -61,5 +61,9 @@ The hash input is the event without its `hash` key, serialised as: object keys s
 |---|---|---|
 | `lease.expired` | path, lease_id, holder, expires_t, ttl | written once (actor `system`) when a claim's ttl has run out; State sets `expired_logged` on the lease |
 | `log.repaired` | bytes, offset, sha256, quarantine | a torn last line was moved to `_harness/quarantine/` and cut off; earlier events are never rewritten |
+| `call.failed` | agent (8 hex), tool, error (clean text, max 200), to (send only, max 60) | 0.16.0: a write tool (send, record, commit, task_update, claim, handoff) failed; actor `system`; never a body, title or other argument; at most 3 per agent per minute; best effort. State ignores it (unknown types are skipped on replay) |
+| `bind.mismatch` | bound, agent, tool, mode, executed, bound_is | 0.16.0: now says `mode` (warn) and `executed: true` (warn mode runs the call under the agent named in `agent=`; it is not a rejection). `bound` is the first agent this server process saw and is not an authority |
 
 Anchors: `<home>/_harness_anchors/anchors.jsonl`, one line `{seq, head, sha256 of "seq:head", ts, reason, host}` per publish and per day. `verify` fails if the log no longer holds the anchored head at the anchored seq. Tamper-evidence against accidental edits and re-chaining only; it is not signing (Wave 2).
+
+Unread marker (0.16.0, not a ledger event): `harness-unread-<agent8>.json` {n, oldest} in the per-user hook state dir, rewritten by the server after a send (recipients) and a read (reader). Counts and a timestamp only. The hook reads it to print one `✉N unread mail` line on a non-harness tool result when mail is older than 2 minutes, at most once per 10 minutes per chat. It does not poll or wake an idle chat.

@@ -1,5 +1,8 @@
 """cc 0.15.1 Wave 3: untrusted text (P6), containment and file safety (P5 core), wording.
 Run: python3 -B tests/test_cc151_w3.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, shutil, stat, sys, tempfile, unittest
 from unittest import mock
 

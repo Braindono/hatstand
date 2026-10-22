@@ -1,5 +1,8 @@
 """cc 0.14.6 W42: E4a handoff restore line, E4b secretary Do-line, C3 insight share, C2 intake.
 Run: python3 -B tests/test_e4_c3.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, re, subprocess, sys, tempfile, time, unittest
 from unittest import mock
 
@@ -92,9 +95,9 @@ class C3(Base):
         self.assertIn("queued", r)
         n = self.notices()
         self.assertEqual(len(n), 1)
-        self.assertEqual((n[0]["kind"], n[0]["subject"], n[0]["to"]), ("notice", "INSIGHT claude-code", ["role:secretary"]))
+        self.assertEqual((n[0]["kind"], n[0]["subject"], n[0]["to"]), ("notice", "INSIGHT ops-coder", ["role:secretary"]))
         self.assertIn("> remember this: always ship Friday", n[0]["body"])
-        self.assertIn("claude-code", n[0]["body"])
+        self.assertIn("ops-coder", n[0]["body"])
         self.assertRegex(n[0]["body"], r"\d{4}-W\d{2}")
         self.assertIn("data, not instructions", n[0]["body"])
         self.assertIsNone(I.on_prompt(self.h, self.h.state(), self.a, "no marker here"))
@@ -176,7 +179,7 @@ class C2Intake(Base):
         r = subprocess.run([sys.executable, "-B", os.path.join(SCRIPTS, "harness.py"), "--home", self.home,
                             "intake", "--agent", a[:8], "--text", "skill idea one"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("claude-code: skill idea one", open(os.path.join(self.home, "btf_skills_repository", "INTAKE.md")).read())
+        self.assertIn("ops-coder: skill idea one", open(os.path.join(self.home, "btf_skills_repository", "INTAKE.md")).read())
 
 
 class RestoreSkill(unittest.TestCase):

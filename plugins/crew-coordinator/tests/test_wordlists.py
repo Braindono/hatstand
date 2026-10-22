@@ -1,4 +1,7 @@
 """cc 0.14.6 H-016: sobriquet word lists + banner role. Run: python3 -B tests/test_wordlists.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -95,14 +98,14 @@ class BannerRole(unittest.TestCase):
         aid = self.h.register(project="skill-curation", model=MODEL, role="skill-curation-lead")["id"]
         b = self.h.card(self.h.state(), aid)["banner"]
         a = self.h.state().agents[aid]
-        self.assertIn(f"◆ {a['sobriquet']} #{aid[:8]} · skill-curation-lead", b)
+        self.assertIn(f"◆ {a['sobriquet']} #{aid[:8]} · curator", b)
 
     def test_no_role_plain_line_and_restore_banner(self):
         aid = self.h.register(project="skill-curation", model=MODEL)["id"]
         line = [l for l in self.h.card(self.h.state(), aid)["banner"].splitlines() if "◆" in l][0]
         self.assertTrue(line.endswith(f"#{aid[:8]}"), line)
         r = self.h.restore("skill-curation-lead", MODEL, confirmed=True)
-        self.assertIn("· skill-curation-lead", r["text"].splitlines()[1])
+        self.assertIn("· curator", r["text"].splitlines()[1])
 
     def test_banner_re_only_matches_box(self):
         box = "╭─ CREW COORDINATOR ────\n│ ◆ Quiet Lynx #aabbccdd · role\n│ expertise: x"

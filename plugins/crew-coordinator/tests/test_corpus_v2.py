@@ -1,5 +1,8 @@
 """cc 0.15.0 corpus system v2: write-time role and tier, expiry, pin by citation, owner ack, archive keeps content,
 unarchive, threshold key. Run: python3 -B tests/test_corpus_v2.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, re, sys, tempfile, time, unittest
 from unittest import mock
 
@@ -9,7 +12,7 @@ import harness as H
 import corpus as C
 
 MODEL = "claude-sonnet-5-5"
-REAL_FOUNDATIONS = os.path.normpath(os.path.join(HERE, "..", "..", "..", "..", "orchestration", "FOUNDATIONS.md"))
+REAL_FOUNDATIONS = os.path.join(HERE, "fixtures", "FOUNDATIONS.md")   # bundled synthetic copy: no file outside the tree
 
 
 def write(path, text):
@@ -121,7 +124,7 @@ class Expiry(Base):
 
     def test_foundations_replaces_archivable(self):
         if not os.path.exists(REAL_FOUNDATIONS):
-            self.skipTest("real FOUNDATIONS.md not found")
+            self.skipTest("fixtures/FOUNDATIONS.md missing")
         with open(REAL_FOUNDATIONS, encoding="utf-8") as f:
             txt = f.read()
         rep = set(C.IDRE.findall(re.search(r"^replaces:(.*)$", txt, re.M).group(1)))

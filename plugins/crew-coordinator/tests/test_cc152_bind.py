@@ -1,4 +1,7 @@
 """cc 0.15.2: bind_mode and per-call approval caller. Run: python3 -B tests/test_cc152_bind.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)

@@ -54,3 +54,18 @@ DONE WHEN: acceptance criteria
 - Never send broadcasts (`*`) for task work. Use explicit targets or groups.
 - Do not poll in tight loops. Use `inbox(wait=…)`.
 - Before handing off, release your leases, or tell the receiver in the body that you are keeping one and why.
+
+## Ladder (moved from SKILL.md)
+After a `task`/`question`/`review` send, follow the result's `ladder`: `harness_inbox wait=<n>` per entry (15, then 2×30, then 3×40; no call over `wait=45`; `inbox-ladder:` in OPERATOR-PREFERENCES.md, `off` disables). First mail ends it; all empty → "still waiting on <id>", end turn. `notice`/`result` start no ladder and need no reply. `[scheduled]` runs and Haiku never listen. D-ec4c9 role wake if the answer is minutes away.
+
+## Corpus
+`title` one line, `body` terse why, `tags` 1–3 lowercase. Changed decision → new entry `supersedes=<id>`; never edit old ones. Cite by id. Recall cards first; `ids=[…]` only if needed.
+
+- After an offload capsule keep only its id.
+
+## Inbox
+A Stop hook adds one reminder line if a reply had no inbox call.
+
+## Threads (moved from SKILL.md)
+`reply_to` continues a thread. Loop guard refusal → `operator` `question`. Task states: `harness_admin op=task_update`.
+

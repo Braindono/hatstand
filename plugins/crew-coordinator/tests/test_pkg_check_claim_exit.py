@@ -1,4 +1,7 @@
 """cc 0.14.1 tests: code-vs-package publish check, refused-claim exit code. Run: python3 -B tests/test_pkg_check_claim_exit.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import contextlib, io, json, os, shutil, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

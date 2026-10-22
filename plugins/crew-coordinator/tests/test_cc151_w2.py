@@ -1,5 +1,8 @@
 """cc 0.15.1 Wave 2: pinned corpus_index.py, dashboard hardening + approve buttons, CLI override gate, sync Do-line.
 Run: python3 -B tests/test_cc151_w2.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import hashlib, http.client, json, os, subprocess, sys, tempfile, threading, unittest
 from unittest import mock
 
@@ -114,8 +117,8 @@ class Pin(PinBase):
 
     def test_pin_known_to_curation_roles_typecheck(self):
         self.assertIn("pin_corpus_index", H.CURATION_ACTIONS)
-        self.assertIn("pin_corpus_index", H.curation_roles(self.home)["corpus-envoy"])
-        self.assertNotIn("pin_corpus_index", H.curation_roles(self.home)["corpus-steward"])
+        self.assertIn("pin_corpus_index", H.curation_roles(self.home)["envoy"])
+        self.assertNotIn("pin_corpus_index", H.curation_roles(self.home)["steward"])
 
     def test_health_line(self):
         import health

@@ -1,5 +1,8 @@
 """cc 0.14.5: hooks follow the restored agent (transcript banner) when the session map is stale.
 Run: python3 -B tests/test_restore_rebind.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))

@@ -1,5 +1,8 @@
 """cc 0.14.7 tests: drift prevention A-J (marketplace, verify, notice, retired/external, --build, dry-run,
 running-code rows, /upgrade registry helper). Run: python3 -B tests/test_drift_prevention.py"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import _env  # noqa: F401  isolate HOME and HARNESS_* first
 import json, os, shutil, stat, sys, tempfile, types, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
