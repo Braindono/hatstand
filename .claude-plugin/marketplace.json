@@ -7,7 +7,7 @@
     {
       "name": "crew-coordinator",
       "source": "./plugins/crew-coordinator",
-      "version": "0.16.1",
+      "version": "0.16.2",
       "description": "Agent-to-agent communication and coordination across Claude sessions: central hash-chained ledger, auto-generated identities (hash + two-word sobriquet + expertise), threaded messaging for sequences, branches and loops, and leases plus versioning for shared files."
     },
     {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.16.2 (unreleased): item 10, restore auto-confirm accepts the absolute capsule path (operator approved 10-23; curator task m-46a4c69cc480)
+Scope (operator-approved): 10. restore_auto_check path canonicalisation; 11. Context windows for surface code
+- Item 11, Context windows for surface code: in ctx_hook.py CTX_TABLE the model claude-opus-5-5 now has window code 1,000,000 (was 500,000, "unmeasured, conservative"), the same as claude-sonnet-5-5; chat and cowork stay 500,000; plan 60% and handoff 80% are unchanged, so 600k and 800k on a Code chat. Operator 2026-10-23: the envoy and curator roles run in Claude Code with the same 1M window as ops-coder; Cowork roles keep the smaller window. A Code chat must have HARNESS_SURFACE=code set (otherwise the surface is "unknown" and the smallest window applies). Tests in tests/test_cc162_ctx_windows.py.
+- Item 10, restore_auto_check canonicalises capsule paths: the auto-confirm check now resolves the capsule through `_resolve_in_home` first, so the absolute path of a capsule in a project folder outside Exchange (for example /Users/<you>/Claude/Code/portfolio/handoffs/<file> with an operator.json project_roots entry) and `projects/<slug>/handoffs/<file>` (also with the `Exchange/` prefix) both auto-confirm. Unrelated paths, `..`, symlinks (now also refused on the absolute form: the symlink walk only covered paths below the Exchange home), missing files and other projects are rejected with the reason `capsule path rejected: ...`. Seven tests in tests/test_cc162_restore_paths.py. Found with the portfolio repro (the absolute path used by the design-coder chat filed an approval instead of restoring).
+
 ## 0.16.1 (unreleased): ONE combined release (operator-approved scope D-5221b, D-dc75c; specs/2026-10-23-combined-release-0161.md). Part A: local transcript indexer and its harness bits (operator rulings D-8b925; privacy conditions D-06dff)
 Scope (operator-approved, items 1-9, D-5221b, D-dc75c; the release-scope gate compares this list):
 1. Incremental State cache (kill switch HARNESS_STATE_CACHE=0)

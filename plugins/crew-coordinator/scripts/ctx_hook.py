@@ -25,7 +25,7 @@ from datetime import datetime
 SURFACES = ("code", "chat", "cowork")
 CTX_TABLE = {
     "claude-opus-5-5": {"plan": 0.60, "handoff": 0.80,
-                        "window": {"code": 500000, "chat": 500000, "cowork": 500000}},    # code unmeasured, conservative
+                        "window": {"code": 1000000, "chat": 500000, "cowork": 500000}},   # 0.16.2: code 1M like sonnet (operator 10-23); chat and cowork keep 500k
     "claude-sonnet-5-5": {"plan": 0.60, "handoff": 0.80,
                           "window": {"code": 1000000, "chat": 500000, "cowork": 500000}},  # measured
     "claude-haiku": {"silent": True, "window": {"code": 200000, "chat": 200000, "cowork": 200000}},

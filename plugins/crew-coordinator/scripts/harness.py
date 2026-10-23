@@ -3083,9 +3083,11 @@ class Harness:
                 return False, "role is gated" if slug else "role has no project", {}
             if project and norm_project(project) != slug:
                 return False, "project differs from the role's project", {}
-            rel = str(capsule).strip().replace("\\", "/")
-            if rel.startswith("Exchange/"):
-                rel = rel[9:]
+            try:    # 0.16.2 (item 10): the absolute form of a capsule in a project folder and projects/<slug>/... both work
+                rel = self._resolve_in_home(str(capsule).strip(), must_exist=True)
+            except HarnessError as e:
+                return False, "capsule path rejected: " + _clean_text(str(e), 100), {}
+            rel = rel.replace("\\", "/")
             m_ = re.match(r"^projects/([a-z0-9][a-z0-9-]*)/handoffs/([^/]+)$", rel)
             if not m_ or m_.group(1) != slug or not HANDOFF_NAME_RE.match(m_.group(2)):
                 return False, f"capsule is not under projects/{slug}/handoffs/", {}
@@ -3401,6 +3403,14 @@ class Harness:
         if os.path.isabs(p):        # 0.15.5: an absolute path inside a project folder the resolver placed outside home
             for slug_, d_ in project_dirs(self.home).items():
                 if _under(os.path.realpath(p), os.path.realpath(d_)):
+                    ad, ap = os.path.abspath(d_), os.path.abspath(p)    # 0.16.2: no symlink on the way (the check above only walks below home)
+                    if not (ap == ad or ap.startswith(ad.rstrip(os.sep) + os.sep)):
+                        raise HarnessError(f"path: {_clean_text(path, 120)} reaches a project folder through a symlink; refusing to follow it")
+                    cur_ = ad
+                    for part_ in [x for x in ap[len(ad):].split(os.sep) if x]:
+                        cur_ = os.path.join(cur_, part_)
+                        if os.path.islink(cur_):
+                            raise HarnessError(f"path: {_clean_text(path, 120)} is a symlink; refusing to follow it")
                     r_ = "projects/%s/%s" % (slug_, os.path.relpath(os.path.realpath(p), os.path.realpath(d_)))
                     break
         if self._PROJ_REL.match(r_) and not os.path.isabs(r_):
