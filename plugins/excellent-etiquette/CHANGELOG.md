@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.8 (2026-10-23)
+Scope (operator-approved, W43 E1): Autonomy P-80 and P-81 release-scope rule
+- Autonomy P-80 and P-81 release-scope rule: release scope (items, version numbers, splitting, deferring, bundling) is the operator's decision; propose it with context and rationale, then wait; builders and the curator never cut, split or renumber a release on their own (D-5221b, D-dc75c).
+- autonomy body held at <=600 tokens: P-91 and P-94 full text moved verbatim to skills/autonomy/references/more.md; the body keeps one trigger-summary line for both. Wording trimmed without changing any rule: merged-id cross-references (P-83, P-86, P-89, P-90; the index still maps them) removed, and P-82, P-81, P-88, P-92 tightened.
+
 ## 0.2.7 (2026-10-20)
 - communication P-98 (computer:// markdown links for local paths), P-99 (operator commands in one fenced block, one line), P-100 (one status line while waiting on an agent).
 - autonomy P-17 extended: routine agent-to-agent correspondence needs no operator prompt (D-c9982).

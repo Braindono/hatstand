@@ -19,7 +19,7 @@
     {
       "name": "excellent-etiquette",
       "source": "./plugins/excellent-etiquette",
-      "version": "0.2.7",
+      "version": "0.2.8",
       "description": "Operator etiquette preferences as skills: communication, autonomy, delegation, plugins, continuity, cv-writing, design; plus /swarm, /argue, /song."
     },
     {
