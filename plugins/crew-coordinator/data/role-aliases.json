@@ -1,10 +1,11 @@
 {
-  "_about": "Role renames (D-85cbc, cc 0.16.0). old name -> current name. The ledger fold always maps old names to the current one, so history replays under the new names. Old names are still accepted as input (register role=, restore role=, send to role:x) until `until`; after that input with an old name is refused with a pointer to the new name. claude-code -> ops-coder is D-bd8f8.",
+  "_about": "Role renames (D-85cbc, cc 0.16.0). old name -> current name. The ledger fold always maps old names to the current one, so history replays under the new names. Old names are still accepted as input (register role=, restore role=, send to role:x) until `until`; after that input with an old name is refused with a pointer to the new name. claude-code -> ops-coder is D-bd8f8. Mail addressed to an old role name is delivered to the new role only when it was sent on or after label_remap_from (in-flight mail around the rename); older mail keeps its old label so a new holder does not receive years of history as unread.",
   "until": "2026-11-21",
   "aliases": {
     "corpus-envoy": "envoy",
     "corpus-steward": "steward",
     "skill-curation-lead": "curator",
     "claude-code": "ops-coder"
-  }
+  },
+  "label_remap_from": "2026-10-22T00:00:00Z"
 }

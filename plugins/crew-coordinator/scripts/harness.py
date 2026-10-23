@@ -24,6 +24,7 @@ import fnmatch
 import glob
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -133,6 +134,7 @@ def norm_project(p) -> str:
 
 
 _ROLE_ALIASES = None
+_LABEL_REMAP_FROM = ""
 
 
 def role_alias_table():
@@ -144,6 +146,8 @@ def role_alias_table():
             with open(os.path.join(PLUGIN_ROOT, "data", "role-aliases.json"), encoding="utf-8") as f:
                 j = json.load(f)
             until = str(j.get("until") or "")
+            global _LABEL_REMAP_FROM
+            _LABEL_REMAP_FROM = str(j.get("label_remap_from") or "")
             for k, v in (j.get("aliases") or {}).items():
                 if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip():
                     out[k.strip().lower()] = v.strip().lower()
@@ -1112,22 +1116,27 @@ class FileStore:
             return ev
 
     def read_all(self):
-        out = []
         self._refuse_symlink(self.log)
         with os.fdopen(os.open(self.log, os.O_RDONLY | NOFOLLOW), "r", encoding="utf-8") as f:
-            for n, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    ev = None
-                # 0.15.3 (P7): only a JSON object is an event. A non-dict line (null, 7, [..]) and any line that
-                # claims type "_corrupt" itself are reported as corrupt (verify lists them), never trusted as events.
-                if not isinstance(ev, dict) or ev.get("type") == "_corrupt":
-                    ev = {"seq": None, "type": "_corrupt", "line": n, "raw": line[:200]}
-                out.append(ev)
+            return self.parse_lines(f)
+
+    @staticmethod
+    def parse_lines(lines):
+        """Events from an iterable of text lines (read_all's rules; also used by the cached State rebuild)."""
+        out = []
+        for n, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                ev = None
+            # 0.15.3 (P7): only a JSON object is an event. A non-dict line (null, 7, [..]) and any line that
+            # claims type "_corrupt" itself are reported as corrupt (verify lists them), never trusted as events.
+            if not isinstance(ev, dict) or ev.get("type") == "_corrupt":
+                ev = {"seq": None, "type": "_corrupt", "line": n, "raw": line[:200]}
+            out.append(ev)
         return out
 
     def changed_since(self, marker):
@@ -1236,6 +1245,7 @@ class State:
         self.groups = {}        # group -> set(agent ids)
         self.servers = {}       # "host:pid" -> server record
         self.registry = {}      # name -> latest release.published
+        self.release_scopes = {}   # (plugin, version) -> release.scope data (0.16.1 item 8)
         self.roles = {}         # role -> {project, owns, partners, carry, desc, holder}
         self.roster_seqs = []   # seqs of roster-changing events (footer ◇n)
         self.corpus_count = 0
@@ -1243,6 +1253,10 @@ class State:
         self.last_hash = GENESIS
         self.corrupt = 0
         self.skipped = []       # 0.14.6 (A7): seqs of malformed events that were skipped, never fatal
+        self.extend(events)
+
+    def extend(self, events):
+        """Fold more events into this State (the constructor's loop; 0.16.1 P8 also uses it for incremental refresh)."""
         for ev in events:
             self._apply(ev)
             if ev.get("type") in ROSTER_EVENTS or (ev.get("type") == "agent.updated" and "project" in (ev.get("data") or {})):
@@ -1381,6 +1395,8 @@ class State:
             a = self.agents.get(d["id"])
             if a:
                 a["status"] = "active"
+        elif typ == "release.scope":
+            self.release_scopes[(str(d.get("plugin")), str(d.get("version")))] = dict(d, seq=ev["seq"], ts=ev["ts"])
         elif typ == "session.bound":
             self.sessions[d["session_id"]] = d["agent"]
         elif typ == "group.joined":
@@ -1395,7 +1411,9 @@ class State:
                 a["groups"].remove(d["group"])
         elif typ == "message.sent":
             m = dict(d)
-            m["to"] = [("role:" + cr(x[5:])) if isinstance(x, str) and x.startswith("role:") else x for x in (m.get("to") or [])]
+            role_alias_table()
+            if str(ev.get("ts") or "") >= _LABEL_REMAP_FROM:     # older mail keeps its old label (0.16.2): no history flood
+                m["to"] = [("role:" + cr(x[5:])) if isinstance(x, str) and x.startswith("role:") else x for x in (m.get("to") or [])]
             m.update({"ts": ev["ts"], "t": t, "seq": ev["seq"], "read_by": []})
             self.messages[m["id"]] = m
             self.order.append(m["id"])
@@ -1848,7 +1866,61 @@ class Harness:
         load_ignore(self.home)
 
     def state(self):
-        return State(self.store.read_all())
+        """0.16.1 (P8): the folded State, kept between calls. Unchanged ledger (size+mtime+inode): the same State with
+        `now` refreshed. Grown ledger: only the new complete lines are folded in, provided the first new event chains
+        to the last folded hash. Anything else (shrunk, replaced, torn, hash mismatch, cache off) rebuilds from line 1,
+        so the result always equals State(read_all()). HARNESS_STATE_CACHE=0 turns it off."""
+        if os.environ.get("HARNESS_STATE_CACHE") == "0":
+            return State(self.store.read_all())
+        try:
+            return self._state_cached()
+        except Exception:
+            self._sc = None
+            return State(self.store.read_all())
+
+    def _state_cached(self):
+        log = self.store.log
+        self.store._refuse_symlink(log)
+        stt = os.stat(log)
+        sig = (stt.st_ino, stt.st_dev)
+        c = getattr(self, "_sc", None)
+        if c and c["sig"] == sig and (stt.st_size, stt.st_mtime_ns) == c["mark"]:
+            c["st"].now = time.time()
+            return c["st"]
+        if c and c["sig"] == sig and stt.st_size > c["offset"]:
+            with os.fdopen(os.open(log, os.O_RDONLY | NOFOLLOW), "rb") as f:
+                f.seek(c["offset"])
+                raw = f.read()
+            end = raw.rfind(b"\n")
+            if end >= 0:
+                evs, ok = [], True
+                for line in raw[:end].split(b"\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line.decode("utf-8"))
+                    except ValueError:
+                        ok = False
+                        break
+                    if not isinstance(ev, dict) or ev.get("type") == "_corrupt":
+                        ok = False
+                        break
+                    evs.append(ev)
+                if ok and evs and evs[0].get("prev") == c["st"].last_hash:
+                    c["st"].extend(evs)
+                    c["st"].now = time.time()
+                    c.update(offset=c["offset"] + end + 1, mark=(stt.st_size, stt.st_mtime_ns))
+                    return c["st"]
+        # full rebuild; remember how far the complete lines reach
+        with os.fdopen(os.open(log, os.O_RDONLY | NOFOLLOW), "rb") as f:
+            data = f.read()
+        evs = self.store.parse_lines(io.TextIOWrapper(io.BytesIO(data), encoding="utf-8"))   # the same bytes the offset is computed from
+        st = State(evs)
+        nl = data.rfind(b"\n")
+        clean = not any(e.get("type") == "_corrupt" for e in evs) and (nl == len(data) - 1)
+        self._sc = {"st": st, "sig": sig, "mark": (stt.st_size, stt.st_mtime_ns), "offset": nl + 1} if clean else None
+        return st
 
     # ---------- identity
     def resolve(self, st: State, ref: str, follow=True) -> str:
@@ -2466,8 +2538,8 @@ class Harness:
     def _ci_script(self):
         try:
             return os.path.join(project_dir(self.home, "orchestration"), "scripts", "corpus_index.py")
-        except HarnessError:
-            return os.path.join(self.home, "projects", "orchestration", "scripts", "corpus_index.py")
+        except HarnessError:   # no folder yet: the resolver's first candidate (override, else legacy), never a home literal
+            return os.path.join(project_dir_candidates(self.home, "orchestration")[0][1], "scripts", "corpus_index.py")
 
     def corpus_index_digests(self, script=None):
         script = script or self._ci_script()
@@ -3595,6 +3667,10 @@ class Harness:
         notes = []
         if note_text and not role:   # cc 0.13.1 (E3)
             notes.append("note skipped: agent has no role")
+        w_ = self._untagged_asks_warning(st, aid, capsule_text) if capsule_md else None
+        if w_:
+            out["warn"] = w_
+            notes.append(w_)
         notes += [x.strip() for x in self._close_note(close_res).split("\n") if x.strip()]
         if role and out.get("capsule"):
             # 0.14.6 (E4a): the restore line is alone in a final code block, printed only because the capsule was
@@ -3608,6 +3684,32 @@ class Harness:
             out["text"] = (f"handoff-ok {m['id']}\nhandoff {m['id']} sent; leases {'released' if release else 'kept for /restore'}. "
                            f"Bootstrap:\n{boot}" + "".join("\n" + n for n in notes))
         return out
+
+    def _untagged_asks_warning(self, st, aid, capsule_text):
+        """0.16.2 (handoff gate, warn only): operator asks the transcript vault holds for this chat since it started,
+        minus the capsule lines tagged [done]/[open]/[dropped]. -> a one-line warning or None. Never raises, never blocks."""
+        try:
+            root = os.environ.get("INDEXER_ROOT") or os.path.expanduser("~/Claude/Transcripts")
+            if not os.path.isdir(root):
+                return None
+            lin = set(st.lineage(aid))
+            sids = [s_[:8] for s_, ag in st.sessions.items() if ag in lin]
+            since = (st.agents[aid].get("spawned_at") or "")[:19].replace("T", " ")
+            asks = 0
+            for fn in os.listdir(root):
+                if fn.endswith(".md") and fn.rsplit("-", 1)[-1][:-3] in sids:
+                    with open(os.path.join(root, fn), "r", encoding="utf-8") as f:
+                        for ln in f:
+                            m = re.match(r"^### operator\b.* (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)$", ln.rstrip("\n"))
+                            if m and m.group(1) >= since:
+                                asks += 1
+            tagged = len(re.findall(r"(?im)^\s*[-*]\s*\[(?:done|open|dropped)\]", capsule_text or ""))
+            if asks > tagged:
+                return (f"{asks - tagged} of {asks} operator asks since this chat started are not tagged in the capsule "
+                        "(list each as `- [done|open|dropped] <ask>`); warning only")
+        except Exception:
+            return None
+        return None
 
     def _add_model_frontmatter(self, capsule_text, model):
         """A5: Ensure capsule has model: field in frontmatter (11: regex on the frontmatter block only)."""
@@ -3914,6 +4016,49 @@ class Harness:
         return "\n".join(out)
 
     # ---------- release registry
+    def release_scope(self, by, plugin, version, items, rationale, approval_ref=None):
+        """0.16.1 (item 8): record the operator-approved scope of one release: {plugin, version, items[], rationale,
+        approval_ref}. Operator only (reached through an approval request). Release scope is the operator's decision."""
+        if by not in OPERATOR:
+            raise HarnessError("release_scope is operator-only (the operator approves the request with `harness.py approve <id>`)")
+        plugin, version = str(plugin or "").strip(), str(version or "").strip()
+        if not PLUGIN_NAME_RE.match(plugin) or not re.match(r"^\d+\.\d+\.\d+$", version):
+            raise HarnessError("release_scope: plugin ([a-z0-9-]+) and version (x.y.z) required")
+        if not isinstance(items, list) or not (1 <= len(items) <= 40) or not all(isinstance(x, str) and 3 <= len(x.strip()) <= 200 for x in items):
+            raise HarnessError("release_scope: items must be 1-40 strings of 3-200 characters (the scope items of the release)")
+        if not str(rationale or "").strip():
+            raise HarnessError("release_scope: rationale required")
+        data = {"plugin": plugin, "version": version, "items": [x.strip() for x in items],
+                "rationale": _clean_text(str(rationale), 600), "approval_ref": _clean_text(str(approval_ref or ""), 80) or None}
+        self.store.append("release.scope", "human", data)
+        return {"plugin": plugin, "version": version, "items": len(data["items"])}
+
+    def _check_release_scope(self, st, name, version, root):
+        """0.16.1 (item 8): publish needs an operator-approved release_scope record for exactly (plugin, version), and the
+        package CHANGELOG section for that version must name every scope item (case-insensitive). The operator override
+        (--operator-override, logged as release.gate_override) skips it. Off only if operator.json sets
+        release_scope_gate to false."""
+        op, _w = _operator_file()
+        if op.get("release_scope_gate") is False:
+            return
+        rec = st.release_scopes.get((name, version))
+        if not rec:
+            raise HarnessError(f"release gate: no operator-approved release_scope record for {name} {version} "
+                               "(harness_admin op=release_scope, then the operator approves; or --operator-override REASON)")
+        try:
+            with open(os.path.join(root, "CHANGELOG.md"), "r", encoding="utf-8") as f:
+                cl = f.read()
+        except OSError:
+            raise HarnessError(f"release gate: {name} {version} has no CHANGELOG.md to compare with the release scope")
+        m = re.search(r"(?ms)^##\s+" + re.escape(version) + r"\b.*?(?=^##\s+\d|\Z)", cl)
+        if not m:
+            raise HarnessError(f"release gate: CHANGELOG.md has no section for {version}")
+        low = m.group(0).lower()
+        missing = [it for it in rec["items"] if it.lower() not in low]
+        if missing:
+            raise HarnessError("release gate: CHANGELOG section for %s does not name scope item(s): %s"
+                               % (version, "; ".join(_clean_text(x, 60) for x in missing[:5])))
+
     def _check_accept_gate(self, st, accept, pkg_sha):
         """cc 0.14.0 (M2): hard release gate. Raise unless --accept names a message from role envoy whose body
         has >=8 hex of the package sha, that is later than every REJECT naming the same sha, and the chain verifies."""
@@ -4139,6 +4284,7 @@ class Harness:
                 warn.append(f"ACCEPT body has no line 'ACCEPT sha={pkg_sha[:12]}'")
         else:
             self._check_accept_gate(st, accept, pkg_sha)
+            self._check_release_scope(st, name_, ver, root)
         mirror = {}
         # 0.14.7 (A, d): stage and validate the marketplace BEFORE any write; a mismatch aborts with nothing written.
         reg_next = self._reg_view(st, {name_: {"version": ver, "code": code, "kind": kind}})
@@ -4358,7 +4504,8 @@ class Harness:
     APPROVAL_MAX_PENDING = 20      # per caller: a flood of requests is refused, not queued
     APPROVAL_ACTIONS = ("publish_override", "flag_release", "archive_operator", "unarchive_operator", "pin_operator",
                         "export", "restore_confirmed", "retire_other", "reload_force", "role_define", "role_assign",
-                        "set_project", "idle_wake", "task_update_other", "tier_foundation", "corpus_index_pin", "retag_operator")
+                        "set_project", "idle_wake", "task_update_other", "tier_foundation", "corpus_index_pin", "retag_operator",
+                        "release_scope")
     # These two cannot run inside the CLI process (they act on the MCP server / bind a new chat): the grant authorizes
     # the SAME call from the requesting agent, which consumes it once (approval.consumed).
     APPROVAL_DEFERRED = ("reload_force", "restore_confirmed")
@@ -4500,6 +4647,8 @@ class Harness:
             return self.role_assign("operator", a["role"], a.get("target"), vacate=bool(a.get("vacate")))
         if action == "set_project":
             return self.set_project(a["target"], a["project"], by="operator")
+        if action == "release_scope":
+            return self.release_scope("operator", a["plugin"], a["version"], a["items"], a["rationale"], a.get("approval_ref"))
         if action == "idle_wake":
             return self.idle_wake(a.get("project"), a.get("on", False))
         if action == "corpus_index_pin":

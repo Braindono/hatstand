@@ -114,7 +114,8 @@ def health(h, project=None, agent=None):
             "flagged": [{k: r[k] for k in ("id", "kind", "flag", "tokens", "gen", "project", "agent_name", "title")} for r in flagged],
             "flagged_tokens": ft, "threshold": thr, "status": "▲" if ft >= thr else "●", "generations": N,
             "projects": projects, "over": [p_["project"] for p_ in projects if p_["status"] == "▲"],
-            "approvals": _approvals(h), "corpus_index_pin": _ci_pin(h), "warnings": _cfg_warnings(h)}
+            "approvals": _approvals(h), "corpus_index_pin": _ci_pin(h), "warnings": _cfg_warnings(h),
+            "transcripts": _transcripts(h)}
 
 
 def _cfg_warnings(h):
@@ -135,6 +136,21 @@ def _ci_pin(h):
         return {"ok": False, "line": f"corpus_index.py pin MISMATCH ({bad})"}
     except Exception as e:
         return {"ok": False, "line": f"corpus_index.py pin MISMATCH (script): {type(e).__name__}"}
+
+
+def _transcripts(h):
+    """0.16.2: the transcript indexer's status from its state file (counts and times only), or None if it never ran."""
+    try:
+        import time as _t
+        p = os.path.join(os.environ.get("INDEXER_CACHE") or os.path.expanduser("~/.cache/harness-indexer"), "state.json")
+        s = json.load(open(p, encoding="utf-8"))
+        c = s.get("counters") or {}
+        last = float(c.get("last_run") or 0)
+        return {"files": len(s.get("files") or {}), "last_run_min": int((_t.time() - last) // 60) if last else None,
+                "redaction_failures": int(c.get("dropped_error") or 0), "denied": int(c.get("denied") or 0),
+                "bad_lines": int(c.get("bad_lines") or 0)}
+    except Exception:
+        return None
 
 
 def _approvals(h):
@@ -168,6 +184,12 @@ def text(d, top=8):
     cp = d.get("corpus_index_pin") or {}
     if cp:
         L.append(("● " if cp.get("ok") else "▲ ") + cp["line"])
+    tr = d.get("transcripts")
+    if tr:    # 0.16.2: indexer status line
+        late = tr["last_run_min"] is None or tr["last_run_min"] > 10
+        L.append(("▲ " if late or tr["redaction_failures"] else "● ") + f"transcripts: {tr['files']} files · last run "
+                 + ("never" if tr["last_run_min"] is None else f"{tr['last_run_min']} min ago")
+                 + f" · redaction failures {tr['redaction_failures']} · denied sessions {tr['denied']} · bad lines {tr['bad_lines']}")
     for w in d.get("warnings") or []:
         L.append("▲ " + _ct(w, 200))
     if d["status"] == "▲":

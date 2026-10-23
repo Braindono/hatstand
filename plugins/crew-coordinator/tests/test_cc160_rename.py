@@ -59,6 +59,33 @@ class Rename(unittest.TestCase):
         [x for x in evs if x["type"] == "message.sent"][-1]["data"]["to"] = ["role:corpus-envoy"]
         self.assertEqual(H.State(evs).messages[r["id"]]["to"], ["role:envoy"])
 
+    def test_old_mail_before_the_cutoff_keeps_its_old_label(self):
+        import copy
+        self.h.role_define("operator", "envoy", "orchestration")
+        self.h.register(project="orchestration", model=MODEL, role="envoy")
+        s = self.h.register(project="orchestration", model=MODEL)["id"]
+        r = self.h.send(s, "role:envoy", "x", subject="s", kind="notice")
+        evs = copy.deepcopy(self.h.store.read_all())
+        ev = [x for x in evs if x["type"] == "message.sent"][-1]
+        ev["data"]["to"] = ["role:corpus-envoy"]
+        ev["ts"] = "2026-10-10T00:00:00.000Z"                      # sent long before the rename
+        self.assertEqual(H.State(evs).messages[r["id"]]["to"], ["role:corpus-envoy"])
+        ev["ts"] = "2026-10-22T08:00:00.000Z"                      # in flight around the rename
+        self.assertEqual(H.State(evs).messages[r["id"]]["to"], ["role:envoy"])
+
+    def test_new_holder_does_not_get_history_as_unread(self):
+        import copy
+        self.h.role_define("operator", "ops-coder", "orchestration")
+        a = self.h.register(project="orchestration", model=MODEL, role="ops-coder")["id"]
+        s = self.h.register(project="orchestration", model=MODEL)["id"]
+        r = self.h.send(s, "role:ops-coder", "old", subject="s", kind="task")
+        evs = copy.deepcopy(self.h.store.read_all())
+        ev = [x for x in evs if x["type"] == "message.sent"][-1]
+        ev["data"]["to"] = ["role:claude-code"]
+        ev["ts"] = "2026-10-12T00:00:00.000Z"
+        st = H.State(evs)
+        self.assertNotIn(r["id"], self.h._inbox_ids(st, a, unread_only=True))
+
     def test_old_name_refused_after_overlap(self):
         self.h.role_define("operator", "envoy", "orchestration")
         with mock.patch("time.strftime", return_value="2027-01-01"):

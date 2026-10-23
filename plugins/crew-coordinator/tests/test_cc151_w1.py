@@ -280,6 +280,7 @@ class Approvals(Base):
         self.agent(project="other-p")    # makes "other-p" a known project for the retag request
         seen["retag_operator"] = self.adm("retag", a, entry=n, project="other-p")
         seen["corpus_index_pin"] = self.adm("pin_corpus_index", a, sha="a" * 12, rules="b" * 12, ref="m-" + "c" * 12)
+        seen["release_scope"] = self.adm("release_scope", a, plugin="dummy", version="1.0.0", items=["one item"], rationale="r")   # 0.16.1 item 8
         self.as_(c)
         seen["task_update_other"] = self.adm("task_update", c, task_id=tid, state="working")
         seen["tier_foundation"] = M.call(self.h, "harness_record", {"agent": c, "kind": "note", "title": "f", "tier": "foundation"})

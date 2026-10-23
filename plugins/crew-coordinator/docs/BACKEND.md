@@ -66,3 +66,15 @@ python3 scripts/harness.py verify           # must be ok=true before migrating
 - Input with an old name (`register role=`, `restore role=`, `harness_send to=role:x`, `role_define`, `role_assign`, `record role=`) resolves to the new role until the `until` date in that file (2026-11-21); after it the old name is refused with a pointer to the new one. Names read from config (`curation_roles`, `steward_roles`, `proof_roles`, `restore_gated_roles`) and operator.json (`listen.roles`) are mapped the same way.
 - Role state notes filed under an old tag (`role-state:corpus-envoy`) and `<project>/<old role>/INTENT.md` folders are still found. The steward prompt `[scheduled] corpus-steward pass` and `[scheduled] steward pass` are both recognised; renaming the schedule command and prompt text is a separate step for the envoy's gates (corpus_index.py --test-rules, run_jobs.py eval --self-test).
 - Removing an alias entry from the file undoes the rename for input; the fold keeps mapping history.
+
+## Transcript indexer (0.16.2)
+
+- Operator commands (shell): `python3 ~/Claude/scripts/transcript_indexer.py install | uninstall | status | search <terms> | spotlight off | purge --session <id>|--all --yes`. Install once; the launch agent keeps it running at low priority. The first run needs sessions to be allowed: registered chats are allowed automatically (ledger), others only if their session id is on a line of `~/Claude/Transcripts/.allow`.
+- Files: vault `~/Claude/Transcripts/*.md` (0600, directory 0700), index and state `~/.cache/harness-indexer/` (0700). The index is derived: `rebuild` recreates it from the vault. Nothing is ever sent anywhere.
+- Privacy: no tool result, hook or system text, no thinking; secrets redacted before anything is written; a message marked [private]/#private is dropped; agents reach the text only through `harness_recall kind=transcript` (role-gated, fenced as data).
+- Tested limit: redaction is pattern-based and best effort, not a guarantee; keep `transcript_roles` short.
+
+## State cache and release-scope gate (0.16.1)
+
+- **State cache.** `Harness.state()` keeps the folded State and refreshes it from the new ledger lines only. Switch off with `HARNESS_STATE_CACHE=0` in the environment of the MCP server or CLI (then every call re-reads the ledger, as in 0.16.0). `verify` always re-reads the whole file. Residual risk: an older byte edited in place plus a later well-formed append is not seen by `state()` until the process restarts; `harness verify` reports it.
+- **Release scope.** Release scope (items, version, split or bundle) is the operator's decision. Before a publish: `harness_admin op=release_scope args={plugin, version, items:[...], rationale, approval_ref}`, the operator runs `python3 <harness.py> approve <A-id>`; then `publish_release` accepts the package only if the CHANGELOG section for that version names every item. Rollback of a wrong scope: record a new `release_scope` for the same (plugin, version); the newest wins. Override: `--operator-override REASON` (logged). Gate off: operator.json `"release_scope_gate": false`.
