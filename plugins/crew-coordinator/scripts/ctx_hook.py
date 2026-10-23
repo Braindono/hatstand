@@ -11,6 +11,7 @@ operator turn. Steward runs ("[scheduled] corpus-steward pass") never get it.
 Idle wake v2 (hr 0.12.4, opt-in per project via config idle_wake_projects; the server prints "idle-wake: on (55m)"):
 state in <state dir>/harness-idle-<sid>.json. Operator prompts stamp + arm (once per 55 min); notification wrappers
 never stamp and are checked against the armed nonce; steward runs never arm."""
+import fnmatch
 import json
 import os
 import re
@@ -25,11 +26,15 @@ from datetime import datetime
 SURFACES = ("code", "chat", "cowork")
 CTX_TABLE = {
     "claude-opus-5-5": {"plan": 0.60, "handoff": 0.80,
-                        "window": {"code": 1000000, "chat": 500000, "cowork": 500000}},   # 0.16.2: code 1M like sonnet (operator 10-23); chat and cowork keep 500k
+                        "window": {"code": 500000, "chat": 500000, "cowork": 500000}},    # code unmeasured, conservative (0.16.3 reverts the 0.16.2 change)
     "claude-sonnet-5-5": {"plan": 0.60, "handoff": 0.80,
                           "window": {"code": 1000000, "chat": 500000, "cowork": 500000}},  # measured
     "claude-haiku": {"silent": True, "window": {"code": 200000, "chat": 200000, "cowork": 200000}},
 }
+# 0.16.3: roles that run with a 1M window on any surface and model (operator 10-23). fnmatch on the CURRENT role name;
+# config ctx_role_windows replaces this map (an empty map switches the feature off).
+DEFAULT_ROLE_WINDOWS = {"*-coder": 1000000, "envoy": 1000000, "curator": 1000000}
+CURRENT_ROLE = None      # set per hook call from the session state file (role parsed from the harness banner)
 COLD_S = 3600
 STEWARD = ("[scheduled] corpus-steward pass", "[scheduled] steward pass")   # 0.16.0: both prompts (the schedule is renamed later)
 DIRTY_TOOLS = ("harness_send", "harness_commit", "harness_claim", "harness_record")
@@ -188,7 +193,35 @@ def _longest(table, model):
     return max(hits, key=len) if hits else None
 
 
-def limits(model=None, path=None, c=None):
+def _role_alias(role):
+    """Current name of a role: old names through data/role-aliases.json (0.16.0 alias layer); stdlib only."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "..", "data", "role-aliases.json"), encoding="utf-8") as f:
+            return str((json.load(f).get("aliases") or {}).get(str(role).strip().lower(), role)).strip().lower()
+    except Exception:
+        return str(role).strip().lower()
+
+
+def role_window(role, c=None):
+    """-> window tokens for `role` from ctx_role_windows (config) or the default map, else None."""
+    if not role:
+        return None
+    c = c if c is not None else {}
+    m = c.get("ctx_role_windows")
+    m = DEFAULT_ROLE_WINDOWS if not isinstance(m, dict) else m
+    name = _role_alias(role)
+    best = None
+    for pat, win in m.items():
+        try:
+            if isinstance(pat, str) and fnmatch.fnmatchcase(name, pat.lower()) and int(win) > 0:
+                best = max(best or 0, int(win))
+        except (TypeError, ValueError):
+            continue
+    return best
+
+
+def limits(model=None, path=None, c=None, role=None):
     """-> {window, plan, handoff (share), plan_tok, handoff_tok (0 = off), silent, surface}.
     Table value by model prefix x surface; config ctx_table merges over it, ctx_window_by_model (flat) wins for
     any surface, ctx_plan_tokens / ctx_handoff_tokens > 0 override the thresholds. Unlisted model:
@@ -211,10 +244,15 @@ def limits(model=None, path=None, c=None):
     else:
         w = int(os.environ.get("HARNESS_CTX_WINDOW") or c.get("ctx_window", 200000))
         plan, hand, silent = float(c.get("ctx_plan", 0.6)), float(c.get("ctx_handoff", 0.8)), False
+    role = role or CURRENT_ROLE
+    rw = role_window(role, c) if not (row or {}).get("silent") else None
+    if rw:    # 0.16.3: the role's window replaces the table window; flat overrides below still win
+        w = rw
     over = c.get("ctx_window_by_model") or {}
     ok = _longest(over, model)
     if ok:
         w = int(over[ok])
+        rw = None
     pt = 0 if silent else int(w * plan)
     nt = 0 if silent else int(w * hand)
     pt = int(c.get("ctx_plan_tokens") or 0) or pt
@@ -223,15 +261,15 @@ def limits(model=None, path=None, c=None):
             "silent": silent, "surface": surf}
 
 
-def window_for(model=None, c=None, path=None):
-    return limits(model, path, c)["window"]
+def window_for(model=None, c=None, path=None, role=None):
+    return limits(model, path, c, role)["window"]
 
 
-def cfg(model=None, path=None, c=None):
+def cfg(model=None, path=None, c=None, role=None):
     """-> (window, plan_pct, handoff_pct, mode, plan_tokens, handoff_tokens); token thresholds 0 = off.
     Mode default "absolute" (tokens = window x share); an explicit "baseline" uses the shares of headroom."""
     c = home_cfg() if c is None else c
-    L = limits(model, path, c)
+    L = limits(model, path, c, role)
     mode = c.get("ctx_mode", "absolute")
     if mode not in ("baseline", "absolute"):
         mode = "absolute"
@@ -246,12 +284,12 @@ def _usage_n(u):
 
 
 def band_for(ctx, baseline=0, win=None, plan=None, now=None, mode=None, plan_tok=None, now_tok=None,
-             model=None, path=None, c=None):
+             model=None, path=None, c=None, role=None):
     """Shared by the hook and harness.py ctx_band(): -> (band, pct); band is "ok"|"plan"|"now".
     Absolute token thresholds (plan_tok/now_tok; None = from the table/config, 0 = off) win over the pct bands.
     pct (always returned, for display): baseline mode (ctx-baseline)/(win-baseline); else ctx/win.
     A silent model (Haiku, D-8ee87) is always "ok"."""
-    w, p, n, m, pt, nt = cfg(model, path, c)
+    w, p, n, m, pt, nt = cfg(model, path, c, role)
     win, plan, now, mode = win or w, plan or p, now or n, mode or m
     pt = pt if plan_tok is None else int(plan_tok or 0)
     nt = nt if now_tok is None else int(now_tok or 0)
@@ -769,6 +807,9 @@ def on_tool(inp):
     line = bh["line"] if bh else None
     if bh:
         s["agent"] = bh["id"][:8]      # 0.16.0: lets the unread line find this chat's marker file
+        parts = [x.strip() for x in bh["line"].split("\u00b7")]
+        rl = parts[1] if len(parts) > 1 else ""
+        s["role"] = None if (not rl or rl.lower().startswith("role unset")) else rl.split()[0].lower()   # 0.16.3: role for the window
     if line is not None:
         s["norole"] = bool(re.search(r"(?:^|·)\s*role unset\s*(?:·|$)", line.strip()))
     elif tool in ("harness_sync", "harness_register", "harness_restore") and any(
@@ -800,6 +841,11 @@ def main():
     if not isinstance(inp, dict):
         return
     t = time.time()
+    global CURRENT_ROLE
+    try:    # 0.16.3: the role stored from the banner decides the window for this call
+        CURRENT_ROLE = load_note(note_path(inp)).get("role") or None
+    except Exception:
+        CURRENT_ROLE = None
     ev = inp.get("hook_event_name") or "PostToolUse"
     msgs = []
     try:

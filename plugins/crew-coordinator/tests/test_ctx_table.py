@@ -54,8 +54,8 @@ class Table(Base):
         os.environ["HARNESS_SURFACE"] = "code"
         self.assertEqual(self.lim(SONNET), (1000000, 600000, 800000))
 
-    def test_opus_code_1m(self):
-        self.assertEqual(self.lim(OPUS, CODE_PATH), (1000000, 600000, 800000))   # 0.16.2 item 11: Opus on Code is 1M
+    def test_opus_code_500k(self):
+        self.assertEqual(self.lim(OPUS, CODE_PATH), (500000, 300000, 400000))   # 0.16.3: Opus on Code back to unmeasured 500k
 
     def test_unlisted_200k_60_80(self):
         self.assertEqual(self.lim("claude-other-1", CODE_PATH), (200000, 120000, 160000))

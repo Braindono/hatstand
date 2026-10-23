@@ -19,10 +19,10 @@ def lim(model, surf):
 
 
 class Windows(unittest.TestCase):
-    def test_code_is_one_million_for_opus_and_sonnet(self):
-        for m in ("claude-opus-5-5", "claude-sonnet-5-5"):
-            l = lim(m, "code")
-            self.assertEqual((l["window"], l["plan_tok"], l["handoff_tok"]), (1000000, 600000, 800000), m)
+    def test_code_window_sonnet_1m_opus_back_to_500k(self):      # 0.16.3 reverts the 0.16.2 Opus change
+        l = lim("claude-sonnet-5-5", "code")
+        self.assertEqual((l["window"], l["plan_tok"], l["handoff_tok"]), (1000000, 600000, 800000))
+        self.assertEqual(lim("claude-opus-5-5", "code")["window"], 500000)
 
     def test_chat_and_cowork_keep_the_smaller_window(self):
         for surf in ("chat", "cowork"):

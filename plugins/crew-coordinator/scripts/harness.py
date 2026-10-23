@@ -1587,7 +1587,7 @@ def plugin_inventory(home, own_code=None):
 SELF_NAME = (read_plugin(PLUGIN_ROOT) or ("crew-coordinator",))[0]
 
 
-def ctx_band(ctx, base=None, home=None, model=None):
+def ctx_band(ctx, base=None, home=None, model=None, role=None):
     """Context gauge, same math as ctx_hook (one source of truth: ctx_hook.band_for, D-5d771/D-8ee87).
     Windows and thresholds come from the hook's model x surface table; config is an optional override
     (this home's config.json). The surface is read from HARNESS_SURFACE only (no transcript path here), so an
@@ -1604,7 +1604,7 @@ def ctx_band(ctx, base=None, home=None, model=None):
         win = int(os.environ.get("HARNESS_CTX_WINDOW") or c.get("ctx_window", 200000))
         pt, nt = int(c.get("ctx_plan_tokens") or 0) or int(win * 0.6), int(c.get("ctx_handoff_tokens") or 0) or int(win * 0.8)
         return "now" if int(ctx) >= nt else "plan" if int(ctx) >= pt else "ok"
-    return band_for(int(ctx), int(base or 0), model=model, c=c)[0]
+    return band_for(int(ctx), int(base or 0), model=model, c=c, role=role)[0]
 
 
 def path_link(p, label=None):
@@ -1622,16 +1622,20 @@ def path_link(p, label=None):
         return str(p)
 
 
-def ctx_surface_line(home=None, model=None):
+def ctx_surface_line(home=None, model=None, role=None):
     """0.15.5 (WP1.2): `ctx surface: <x> (<explicit|path|unknown>), plan <n>k, handoff <n>k`; None for a silent model
     (Haiku, D-8ee87). harness.py has no transcript path, so the source here is explicit (HARNESS_SURFACE) or unknown."""
     try:
         from ctx_hook import limits, surface_src
-        L = limits(model, None, load_config(home) if home else {})
+        c_ = load_config(home) if home else {}
+        L = limits(model, None, c_, role)
         if L["silent"]:
             return None
         surf, src = surface_src(None)
-        return f"ctx surface: {surf} ({src}), plan {L['plan_tok'] // 1000}k, handoff {L['handoff_tok'] // 1000}k"
+        from ctx_hook import role_window
+        rw = role_window(role, c_) if role else None
+        return (f"ctx surface: {surf} ({src}), plan {L['plan_tok'] // 1000}k, handoff {L['handoff_tok'] // 1000}k"
+                + (f" · role window {rw // 1000}k ({role})" if rw else ""))
     except Exception:
         return None
 
@@ -5164,7 +5168,7 @@ class Harness:
                 break
         hkeys = {r[1]: health_key(r[2]) for r in rows}
         health_changed = [r[2] for r in rows if (prev_keys or {}).get(r[1]) != hkeys[r[1]]]
-        band = ctx_band(ctx, ctx_base_in if ctx_base_in is not None else me.get("ctx_base"), self.home, me.get("model"))
+        band = ctx_band(ctx, ctx_base_in if ctx_base_in is not None else me.get("ctx_base"), self.home, me.get("model"), st.role_of(aid))
         if mark and current == aid:
             self.store.append("agent.synced", aid, {"id": aid, "seq": st.last_seq, "config": now_fp, "inv": inv,
                                                     "hrows": hkeys, "ctx": int(ctx) if ctx is not None else None, "ctx_base": int(ctx_base_in) if ctx_base_in is not None else None,
@@ -5289,7 +5293,7 @@ class Harness:
             ch.append(f"+{elsewhere} elsewhere: harness_sync full=true")
 
         gauge = f" · ctx ~{int(ctx) // 1000}k {band}" if band else ""
-        sline = ctx_surface_line(self.home, me.get("model"))
+        sline = ctx_surface_line(self.home, me.get("model"), st.role_of(aid))
         if sline and ctx is None:    # 0.15.5 (WP1.3): no measured size, say so instead of printing a number or "ok"
             gauge += " · ctx unmeasured"
         if (me.get("model") or "unknown") == "unknown":
@@ -5391,7 +5395,7 @@ class Harness:
         ro = sum(1 for s in st.roster_seqs if s > bs)
         if ro:
             bits.append(f"◇{ro}")
-        if ctx_band(a.get("ctx"), a.get("ctx_base"), self.home, a.get("model")) == "now":
+        if ctx_band(a.get("ctx"), a.get("ctx_base"), self.home, a.get("model"), st.role_of(a["id"])) == "now":
             bits.append("ctx→handoff")
         return ("⋯ " + " · ".join(bits)) if bits else ""
 
@@ -5414,7 +5418,7 @@ class Harness:
                 if pc and r.get("code") and not (pc[1] and r["code"].startswith(pc[1])):
                     behind.append(f"{n} {pc[0]}→{r['version']}")
             unread = len(self._inbox_ids(st, a["id"], True))
-            band = ctx_band(a.get("ctx"), a.get("ctx_base"), self.home, a.get("model"))
+            band = ctx_band(a.get("ctx"), a.get("ctx_base"), self.home, a.get("model"), st.role_of(a["id"]))
             stale = a.get("last_seen", 0) < st.now - float(window) * 3600
             need = 4 * (restart or bool(behind)) + 3 * (band == "now") + 2 * (unread > 0) + (band == "plan")
             rows.append({"name": a["sobriquet"], "short": a["short"], "project": a.get("project") or "(none)",

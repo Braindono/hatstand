@@ -82,3 +82,7 @@ python3 scripts/harness.py verify           # must be ok=true before migrating
 ## Context windows by surface (0.16.2, item 11)
 
 The hook's table gives the window per model and surface: claude-opus-5-5 and claude-sonnet-5-5 are 1,000,000 on `code` and 500,000 on `chat` and `cowork`; Haiku is 200,000 everywhere. Plan at 60% and handoff at 80% of that window. **Set `HARNESS_SURFACE=code` for every chat that runs in Claude Code** (envoy, curator, ops-coder, design-coder); without it the surface is `unknown` and the smallest window (500k) applies, so a Code chat is told to hand off at 400k instead of 800k. `harness_sync` prints `ctx surface: ...` while the surface is unknown. A `ctx_table` row in config.json or `ctx_window_by_model` still overrides the table.
+
+## Role-keyed context windows (0.16.3)
+
+`*-coder` roles, `envoy` and `curator` have a 1M window on any surface and model, so they are warned at 600k and told to hand off at 800k. The hook learns the role from the harness banner of the last register/restore/whoami result in the chat; until then the model x surface table applies. Edit the list with `ctx_role_windows` in `Exchange/_harness/config.json` (`{"secretary": 800000}` adds a role; `{}` turns the feature off). `HARNESS_SURFACE=code` is still required for a Code chat's model x surface window (for roles outside the list); the role window does not depend on it. Claude Opus on Code is 500k (unmeasured) again.
