@@ -1,0 +1,186 @@
+{
+ "bait": [
+  "N-18d4a"
+ ],
+ "built": "2026-10-25",
+ "canary": [
+  "D-ab97a"
+ ],
+ "entries": 34,
+ "files": {
+  "OPERATOR.md": "8ddd9c6c2df9334c672508cbb47c566b3ca36ab321d31ae8e927ad0a264aca7c",
+  "_archive/2026-10-25-handoff-status/MANIFEST.sha256": "72583c6da9e2e4b7eaa90bf8af8d30d1d0eb26e5c9426eecdd87fb1a34121a58",
+  "_archive/2026-10-25-handoff-status/projects/orchestration/handoffs/2026-10-25-brave-steppe.md": "6ccbcea862606deadf6e06266c68c257fc3840e74dea855c2cebba56ba40997a",
+  "_archive/2026-10-25-handoff-status/projects/secretary/handoffs/2026-10-25-lush-tide.md": "6ccbcea862606deadf6e06266c68c257fc3840e74dea855c2cebba56ba40997a",
+  "_archive/2026-10-25-handoff-status/projects/secretary/handoffs/2026-10-25-rocky-impala.md": "6ccbcea862606deadf6e06266c68c257fc3840e74dea855c2cebba56ba40997a",
+  "_archive/2026-10-25-handoff-status/projects/secretary/handoffs/2026-10-25-thorny-condor.md": "6ccbcea862606deadf6e06266c68c257fc3840e74dea855c2cebba56ba40997a",
+  "_harness/config.json": "786af02c1984bed8f628465aa4efdd9ad947360789edda039ce1bf98508d8aaf",
+  "_harness/events.jsonl": "00e7a17e5ab83768bafe8b08517192b333cdbf3bfd984c9e6014351871753261",
+  "projects/orchestration/handoffs/2026-10-25-brave-steppe.md": "753a3ce6397d0b2936bf1d6da9ffd3cbf12647177dd495f03b0ad2d9028096e4",
+  "projects/secretary/handoffs/2026-10-25-lush-tide.md": "fca73358ae72ebf2c6335facfc1fa7405aea0bdfc60d0eba9a88f1caf81fec3e",
+  "projects/secretary/handoffs/2026-10-25-rocky-impala.md": "5b31d39b9beeb46481381bef53d749931be490aa9e0656287751451a0aaa6594",
+  "projects/secretary/handoffs/2026-10-25-thorny-condor.md": "7c3c54722027b7dee4bd4b1719470eff1ee3d0780035d0ca196bb3e885866b8c"
+ },
+ "flagged": [
+  "D-ab97a",
+  "K-1fa62",
+  "K-389cb",
+  "K-38d54",
+  "K-7161a",
+  "N-18d4a"
+ ],
+ "golden": [
+  {
+   "expect": "N-456be",
+   "present": true,
+   "q": "invoice"
+  },
+  {
+   "expect": "N-61d1d",
+   "present": true,
+   "q": "calendar"
+  },
+  {
+   "expect": "D-eed88",
+   "present": true,
+   "q": "triage"
+  },
+  {
+   "expect": "N-e2e40",
+   "present": true,
+   "q": "travel"
+  },
+  {
+   "expect": "D-65304",
+   "present": true,
+   "q": "birthday"
+  },
+  {
+   "expect": "N-c8851",
+   "present": true,
+   "q": "pharmacy"
+  },
+  {
+   "expect": "N-4d389",
+   "present": true,
+   "q": "utility"
+  },
+  {
+   "expect": "D-0e438",
+   "present": true,
+   "q": "cover"
+  },
+  {
+   "expect": "N-17117",
+   "present": true,
+   "q": "referees"
+  },
+  {
+   "expect": "N-9621c",
+   "present": true,
+   "q": "portfolio"
+  },
+  {
+   "expect": "D-8b0d0",
+   "present": true,
+   "q": "salary"
+  },
+  {
+   "expect": "N-cdbbd",
+   "present": true,
+   "q": "interview"
+  },
+  {
+   "expect": "N-f113d",
+   "present": true,
+   "q": "headshot"
+  },
+  {
+   "expect": "D-b0281",
+   "present": true,
+   "q": "semver"
+  },
+  {
+   "expect": "N-e5736",
+   "present": true,
+   "q": "marketplace"
+  },
+  {
+   "expect": "N-10913",
+   "present": true,
+   "q": "warnings"
+  },
+  {
+   "expect": "D-888b6",
+   "present": true,
+   "q": "changelog"
+  },
+  {
+   "expect": "N-95823",
+   "present": true,
+   "q": "regenerated"
+  },
+  {
+   "expect": "N-47983",
+   "present": true,
+   "q": "installs"
+  },
+  {
+   "expect": "N-dbd04",
+   "present": true,
+   "q": "trend"
+  },
+  {
+   "expect": "N-7bf71",
+   "present": true,
+   "q": "weekly"
+  },
+  {
+   "expect": "N-ed5a1",
+   "present": true,
+   "q": "feed"
+  },
+  {
+   "expect": "N-a9326",
+   "present": true,
+   "q": "proof"
+  },
+  {
+   "expect": "D-428c7",
+   "present": true,
+   "q": "inspects"
+  },
+  {
+   "expect": "D-0ee60",
+   "present": true,
+   "q": "trigger"
+  },
+  {
+   "expect": "N-6c015",
+   "present": true,
+   "q": "spot"
+  },
+  {
+   "expect": "N-ffa96",
+   "present": true,
+   "q": "verdicts"
+  },
+  {
+   "expect": "D-8652e",
+   "present": true,
+   "q": "never"
+  },
+  {
+   "expect": "D-ab97a",
+   "present": true,
+   "q": "quarterly"
+  },
+  {
+   "expect": "N-18d4a",
+   "present": false,
+   "q": "scheduler"
+  }
+ ],
+ "purpose": "R-045 steward pass checks; synthetic, no live data",
+ "steward": "3ee0d36e21f8d41c4ca2ebb9a3dc44b421e06152a2723cdb78f1d226888d636c"
+}

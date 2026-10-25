@@ -2,19 +2,21 @@
 """Local transcript indexer (stdlib only, zero model tokens).
 
 Reads Claude Code session transcripts (~/.claude/projects/*/<session>.jsonl), keeps what the operator typed and what
-the assistant said, redacts secrets, writes plain-text vault files under ~/Claude/Transcripts and keeps a rebuildable
+the assistant said, redacts secrets, writes plain-text vault files under ~/Claude/Transcripts.noindex and keeps a rebuildable
 SQLite FTS5 index under ~/.cache/harness-indexer. Conditions from the envoy's privacy check (m-312a43bd0faa):
 
-  * per-host, outside Exchange, never synced: root ~/Claude/Transcripts, dirs 0700, files 0600
+  * per-host, outside Exchange, never synced: root ~/Claude/Transcripts.noindex (0.17.0; the old ~/Claude/Transcripts is
+    renamed by `install` and left as a symlink for one release), dirs 0700, files 0600
   * default-deny: only sessions the harness registered (ledger session.bound / agent.registered) or listed in the
     operator's allow-list file <root>/.allow are written; everything else is counted and skipped
   * fail-closed redaction: a message whose redaction raises is dropped; [private] / #private messages are dropped whole
   * vault text is data: every file starts with an UNTRUSTED header and the body sits inside a fence
-  * `.metadata_never_index` marker (Spotlight opt-out) is offered with `spotlight off`
+  * Spotlight: the *.noindex folder name keeps it out; `spotlight off` also writes the .metadata_never_index marker and
+    probes with mdfind, warning when Spotlight still indexes the folder (the marker alone is ignored on macOS 26.7.1)
   * purge is an operator shell command only (no MCP tool); `install` copies this script to ~/Claude/scripts and loads a
     launch agent (operator rulings D-8b925); `uninstall` unloads it and keeps transcripts and index; `plist` prints only
 
-Commands: once | run | status | search <terms> | spotlight on|off | purge --session ID|--all --yes | plist | install | uninstall
+Commands: once | run | status | search <terms> | spotlight on|off | purge --session ID|--all [--vault] --yes | plist | install | uninstall | wiki
 """
 import argparse
 import hashlib
@@ -39,7 +41,70 @@ def home():
 
 
 def default_root():
-    return os.environ.get("INDEXER_ROOT") or os.path.join(home(), "Claude", "Transcripts")
+    """0.17.0 (R-076): a folder named *.noindex is excluded by Spotlight; the .metadata_never_index marker is ignored
+    on macOS 26.7.1. INDEXER_ROOT still wins."""
+    return os.environ.get("INDEXER_ROOT") or os.path.join(home(), "Claude", "Transcripts.noindex")
+
+
+def legacy_root():
+    return os.path.join(home(), "Claude", "Transcripts")
+
+
+def migrate_root(root=None, legacy=None):
+    """Move the vault from the old root to the new one by rename, never copy or delete; leave a symlink at the old path
+    (for one release). An empty new folder (made by an earlier command) counts as absent. Both folders holding files:
+    nothing is moved and the result says so. -> {"action": ..., ...}"""
+    root, legacy = root or default_root(), legacy or legacy_root()
+    if os.path.islink(legacy):
+        return {"action": "none", "reason": "old path is already a symlink", "points_to": os.readlink(legacy)}
+    if not os.path.isdir(legacy):
+        return {"action": "none", "reason": "no old vault"}
+    if os.path.realpath(legacy) == os.path.realpath(root):
+        return {"action": "none", "reason": "root is the old path (INDEXER_ROOT)"}
+    if os.path.lexists(root):
+        if os.path.isdir(root) and not os.path.islink(root) and not os.listdir(root):
+            os.rmdir(root)                                   # empty folder only: nothing in it to lose
+        else:
+            return {"action": "conflict", "reason": "both folders exist; nothing moved", "old": legacy, "new": root}
+    os.rename(legacy, root)
+    os.symlink(root, legacy)
+    return {"action": "renamed", "old": legacy, "new": root, "symlink": legacy}
+
+
+def vault_dir():
+    """0.17.0 (R-051a): the distilled vault under Exchange (beside _harness). INDEXER_VAULT wins."""
+    return os.environ.get("INDEXER_VAULT") or os.path.join(os.path.dirname(os.path.dirname(exchange_log())), "vault")
+
+
+def purge_vault(session=None, all_=False, vroot=None):
+    """Operator shell only (R-051a): remove vault files that drew on `session` (their meta line lists it), or all.
+    Each removal leaves a tombstone <file>.purged (date, session, sha; no content) and a line in <vault>/.purged.jsonl."""
+    vroot = vroot or vault_dir()
+    gone = []
+    if not os.path.isdir(vroot):
+        return gone
+    for dirpath, _d, files in os.walk(vroot):
+        for fn in sorted(files):
+            if not fn.endswith(".md"):
+                continue
+            p = os.path.join(dirpath, fn)
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    doc = f.read()
+                m = re.search(r"^meta: (\{.*\})$", doc, re.M)
+                sids = (json.loads(m.group(1)).get("sessions") or []) if m else []
+            except (OSError, ValueError):
+                sids = []
+            if not (all_ or (session and any(str(x).startswith(session) or session.startswith(str(x)) for x in sids if x))):
+                continue
+            sha = hashlib.sha256(doc.encode("utf-8")).hexdigest()[:12]
+            line = {"purged": os.path.relpath(p, vroot), "session": session or "*", "sha": sha,
+                    "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            os.remove(p)
+            _write_private(p + ".purged", json.dumps(line) + "\n")
+            _write_private(os.path.join(vroot, ".purged.jsonl"), json.dumps(line) + "\n", "a")
+            gone.append(line["purged"])
+    return gone
 
 
 def cache_dir():
@@ -227,6 +292,9 @@ def _write_private(path, text, mode="w"):
 class Indexer:
     def __init__(self, root=None, cache=None, source=None, ledger=None):
         self.root = root or default_root()
+        if not root and not os.environ.get("INDEXER_ROOT") and not os.path.lexists(self.root) \
+                and os.path.isdir(legacy_root()) and not os.path.islink(legacy_root()):
+            self.root = legacy_root()          # not migrated yet: keep using the old vault until `install` renames it
         self.cache = cache or cache_dir()
         self.source = source or source_dir()
         self.ledger = ledger
@@ -234,21 +302,39 @@ class Indexer:
         _mkdir(self.cache)
         self.state_path = os.path.join(self.cache, "state.json")
         self.db_path = os.path.join(self.cache, "index.sqlite")
+        self._pass_sessions = None
         self.state = self._load_state()
         self.stats = {"files": 0, "written": 0, "denied": 0, "bad_lines": 0, "dropped_private": 0, "dropped_error": 0,
                       "redacted": 0}
 
     # state: {"format", "parser", "files": {path: {"ino", "size", "offset", "vault"}}, "counters": {...}}
     def _load_state(self):
+        """A missing state file is a first run. An unreadable or corrupt one is NOT treated as empty (0.17.0): it is
+        reported by `status` and `once` refuses to run, because a fresh state would re-read every transcript and append
+        it to the vault a second time. A format or parser change still starts over, as before."""
+        self.state_error = None
+        fresh = {"format": FORMAT_VERSION, "parser": PARSER_VERSION, "files": {}, "denied_sessions": [],
+                 "counters": {"bad_lines": 0, "denied": 0, "dropped_error": 0, "dropped_private": 0, "redacted": 0, "last_run": 0}}
         try:
             with open(self.state_path, "r", encoding="utf-8") as f:
                 s = json.load(f)
-            if s.get("format") == FORMAT_VERSION and s.get("parser") == PARSER_VERSION:
-                return s
-        except (OSError, ValueError):
-            pass
-        return {"format": FORMAT_VERSION, "parser": PARSER_VERSION, "files": {},
-                "counters": {"bad_lines": 0, "denied": 0, "dropped_error": 0, "dropped_private": 0, "redacted": 0, "last_run": 0}}
+            if not isinstance(s, dict):
+                raise ValueError("not an object")
+        except FileNotFoundError:
+            return fresh
+        except (OSError, ValueError) as e:
+            self.state_error = "%s: %s" % (type(e).__name__, str(e)[:120])
+            return fresh
+        if s.get("format") != FORMAT_VERSION or s.get("parser") != PARSER_VERSION:
+            return fresh
+        s.setdefault("denied_sessions", [])
+        legacy = legacy_root() + os.sep
+        if os.path.abspath(self.root) != os.path.abspath(legacy_root()):   # not realpath: the old path is a symlink after the rename
+            for rec in s.get("files", {}).values():   # vault paths written under the old root follow the rename
+                v = rec.get("vault")
+                if v and v.startswith(legacy):
+                    rec["vault"] = os.path.join(self.root, v[len(legacy):])
+        return s
 
     def _save_state(self):
         tmp = self.state_path + ".tmp"
@@ -265,7 +351,16 @@ class Indexer:
     def allowed(self, session):
         if self.ledger is False:
             return session in allow_list(self.root)
-        return session in ledger_sessions(self.ledger) or session in allow_list(self.root)
+        if self._pass_sessions is None:            # read the ledger once per pass, not once per file
+            self._pass_sessions = ledger_sessions(self.ledger)
+        return session in self._pass_sessions or session in allow_list(self.root)
+
+    def _set_denied(self, session, denied):
+        """0.17.0: `denied` counts distinct sessions (it counted every denied scan of every pass)."""
+        ds = set(self.state.setdefault("denied_sessions", []))
+        (ds.add if denied else ds.discard)(session)
+        self.state["denied_sessions"] = sorted(ds)
+        self.state["counters"]["denied"] = len(ds)
 
     def vault_path(self, session, project, first_ts):
         day = (first_ts or time.strftime("%Y-%m-%dT"))[:10]
@@ -286,10 +381,12 @@ class Indexer:
             self.state["files"][path] = rec
             return
         if not self.allowed(session):
-            self.state["counters"]["denied"] += 1
-            self.stats["denied"] += 1
+            if rec.get("size") != st.st_size or session not in self.state.get("denied_sessions", []):
+                self.stats["denied"] += 1                                    # per pass: denied files that changed
+            self._set_denied(session, True)
             self.state["files"][path] = dict(rec, size=st.st_size)        # offset stays 0: allowed later, it is read in full
             return
+        self._set_denied(session, False)
         with open(path, "rb") as f:
             f.seek(rec["offset"])
             raw = f.read()
@@ -344,7 +441,10 @@ class Indexer:
         self.state["files"][path] = rec
 
     def once(self):
-        self.stats["files"] = 0
+        if self.state_error:
+            raise RuntimeError("state file unreadable (%s): %s; fix or move it aside, then run again" % (self.state_error, self.state_path))
+        self.stats["files"] = self.stats["denied"] = 0
+        self._pass_sessions = None
         for dirpath, _dirs, files in os.walk(self.source):
             for fn in sorted(files):
                 if fn.endswith(".jsonl") and not os.path.islink(os.path.join(dirpath, fn)):
@@ -397,18 +497,32 @@ class Indexer:
     def status(self):
         files = self.state["files"]
         c = self.state["counters"]
-        return {"files_tracked": len(files), "bad_lines": c["bad_lines"], "denied_sessions_scans": c["denied"],
+        lr = c.get("last_run", 0) or 0
+        out = {"files_tracked": len(files), "bad_lines": c["bad_lines"], "denied_sessions": len(self.state.get("denied_sessions", [])),
                 "redaction_failures": c.get("dropped_error", 0), "private_dropped": c.get("dropped_private", 0),
-                "last_run": c.get("last_run", 0), "root": self.root,
+                "last_run": lr, "last_run_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(lr)) if lr else "never",
+                "root": self.root, "state_path": self.state_path,
                 "vault_files": len([x for x in os.listdir(self.root) if x.endswith(".md")]) if os.path.isdir(self.root) else 0,
                 "format": FORMAT_VERSION, "parser": PARSER_VERSION}
+        if self.state_error:
+            out["state_error"] = self.state_error + " (counters above are NOT the real ones)"
+        return out
 
     def purge(self, session=None, all_=False):
-        """Operator shell only. Removes vault files, index rows and the read offsets of one session or of everything."""
+        """Operator shell only. Removes vault files, index rows and the read offsets of one session or of everything.
+        0.17.0 (R-087, operator ruling D-8b925): each removed file leaves a tombstone <file>.purged and a line in
+        <root>/.purged.jsonl (name, session, sha, time; never content), as the vault purge does."""
         gone = []
         for fn in sorted(os.listdir(self.root)):
             if fn.endswith(".md") and (all_ or (session and fn.rsplit("-", 1)[-1][:-3] == session[:8])):
-                os.remove(os.path.join(self.root, fn))
+                p = os.path.join(self.root, fn)
+                with open(p, "rb") as f:
+                    sha = hashlib.sha256(f.read()).hexdigest()[:12]
+                line = json.dumps({"purged": fn, "session": session or "*", "sha": sha,
+                                   "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}) + "\n"
+                os.remove(p)
+                _write_private(p + ".purged", line)
+                _write_private(os.path.join(self.root, ".purged.jsonl"), line, "a")
                 gone.append(fn)
         db = self._db()
         db.execute("DELETE FROM t" if all_ else "DELETE FROM t WHERE session = ?", () if all_ else (session,))
@@ -421,14 +535,50 @@ class Indexer:
         return gone
 
 
-def spotlight(root, off):
+def spotlight(root, off, probe_s=30, run=None, sleep=time.sleep):
+    """`spotlight off` writes the marker and then PROBES (0.17.0, R-076): it writes a file holding a random token and
+    asks mdfind for it for up to probe_s seconds. Found = Spotlight indexes this folder, whatever the marker says.
+    The probe file is removed afterwards. -> {"marker", "noindex_name", "probe": found|not-found|unavailable|skipped, "warning"?}"""
     marker = os.path.join(root, ".metadata_never_index")
     if off:
         _mkdir(root)
         _write_private(marker, "")
     elif os.path.exists(marker):
         os.remove(marker)
-    return os.path.exists(marker)
+    real = os.path.realpath(root)
+    out = {"marker": os.path.exists(marker), "noindex_name": real.endswith(".noindex"), "root": real}
+    if not off or probe_s <= 0:
+        out["probe"] = "skipped"
+        return out
+    run = run or (lambda cmd: __import__("subprocess").run(cmd, capture_output=True, text=True, timeout=20))
+    token = "hxprobe" + hashlib.sha256(os.urandom(16)).hexdigest()[:20]
+    probe = os.path.join(real, ".probe-%s.txt" % token)
+    _write_private(probe, "spotlight probe %s\n" % token)
+    try:
+        found, deadline = None, time.time() + probe_s
+        while True:
+            try:
+                r = run(["mdfind", "-onlyin", real, token])
+            except (OSError, ValueError, __import__("subprocess").SubprocessError):
+                found = None
+                break
+            if getattr(r, "returncode", 1) != 0:
+                found = None
+                break
+            found = bool((getattr(r, "stdout", "") or "").strip())
+            if found or time.time() >= deadline:
+                break
+            sleep(3)
+    finally:
+        try:
+            os.remove(probe)
+        except OSError:
+            pass
+    out["probe"] = "unavailable" if found is None else ("found" if found else "not-found")
+    if found:
+        out["warning"] = ("Spotlight indexed a new file in %s within %ds: the never-index marker is not honoured here. "
+                          "Use a folder named *.noindex (the default root since 0.17.0; `install` migrates)." % (real, probe_s))
+    return out
 
 
 PLIST = """<?xml version="1.0" encoding="UTF-8"?>
@@ -442,6 +592,7 @@ PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 <key>ProcessType</key><string>Background</string>
 <key>Nice</key><integer>10</integer>
 <key>LowPriorityIO</key><true/>
+<key>EnvironmentVariables</key><dict><key>INDEXER_ROOT</key><string>{root}</string></dict>
 <key>StandardOutPath</key><string>{log}</string>
 <key>StandardErrorPath</key><string>{log}</string>
 </dict></plist>
@@ -459,24 +610,53 @@ def launch_dir():
 LABEL = "com.harness.indexer"
 
 
+def wiki_pass(ix):
+    """0.17.0 (R-046): regenerate the wiki after a pass when transcript_wiki.py sits beside this script (the install
+    copies it). Off when <root>/.wiki-off exists. Never raises: a wiki fault must not stop indexing."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.isfile(os.path.join(here, "transcript_wiki.py")):
+        return {"off": True, "reason": "transcript_wiki.py not beside the indexer"}
+    try:
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import transcript_wiki
+        return transcript_wiki.generate(exchange_log(), vault_dir(), ix.root)
+    except Exception as e:
+        return {"error": type(e).__name__}
+
+
 def install(ix, run=None):
-    """Operator command: copy this script to a stable path, write the launch agent there and load it."""
+    """Operator command: unload a running agent, move the vault to the .noindex root (rename + symlink, 0.17.0),
+    copy this script to a stable path, write the launch agent there and load it."""
     import shutil
     run = run or (lambda cmd: __import__("subprocess").run(cmd, capture_output=True, text=True))
+    uid = os.getuid()
+    plist = os.path.join(launch_dir(), LABEL + ".plist")
+    run(["launchctl", "bootout", "gui/%d" % uid, plist])            # stop it before the vault moves
+    mig = migrate_root()
+    if mig["action"] != "conflict":
+        ix.root = default_root()          # a conflict leaves both folders as they are and the agent on the current root
     _mkdir(scripts_dir())
     dest = os.path.join(scripts_dir(), "transcript_indexer.py")
     if os.path.abspath(__file__) != os.path.abspath(dest):
         shutil.copy2(__file__, dest)
     os.chmod(dest, 0o755)
+    here = os.path.dirname(os.path.abspath(__file__))   # 0.17.0 (R-046): the wiki generator and the role names it maps
+    for src, name in ((os.path.join(here, "transcript_wiki.py"), "transcript_wiki.py"),
+                      (os.path.join(here, "..", "data", "role-aliases.json"), "role-aliases.json")):
+        if os.path.isfile(src) and os.path.abspath(src) != os.path.abspath(os.path.join(scripts_dir(), name)):
+            shutil.copy2(src, os.path.join(scripts_dir(), name))
     _mkdir(launch_dir())
-    plist = os.path.join(launch_dir(), LABEL + ".plist")
+    _mkdir(ix.root)
     with open(plist, "w", encoding="utf-8") as f:
-        f.write(PLIST.format(script=dest, log=os.path.join(ix.cache, "log")))
-    uid = os.getuid()
-    run(["launchctl", "bootout", "gui/%d" % uid, plist])            # a reinstall replaces the loaded one
+        f.write(PLIST.format(script=dest, log=os.path.join(ix.cache, "log"), root=_xml(ix.root)))
     r = run(["launchctl", "bootstrap", "gui/%d" % uid, plist])
-    return {"script": dest, "plist": plist, "loaded": getattr(r, "returncode", 1) == 0,
+    return {"script": dest, "plist": plist, "root": ix.root, "migration": mig, "loaded": getattr(r, "returncode", 1) == 0,
             "detail": (getattr(r, "stderr", "") or "").strip()[:200]}
+
+
+def _xml(text):
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def uninstall(ix, run=None):
@@ -494,11 +674,13 @@ def uninstall(ix, run=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("cmd", choices=["once", "run", "status", "search", "spotlight", "purge", "plist", "install", "uninstall", "rebuild"])
+    ap.add_argument("cmd", choices=["once", "run", "status", "search", "spotlight", "purge", "plist", "install", "uninstall", "rebuild", "wiki"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--session")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--yes", action="store_true")
+    ap.add_argument("--vault", action="store_true", help="purge: also remove the Exchange/vault files built from it")
+    ap.add_argument("--probe-seconds", type=int, default=30, help="spotlight off: how long to wait for mdfind (0 = no probe)")
     a = ap.parse_args(argv)
     ix = Indexer()
     if a.cmd == "once":
@@ -509,22 +691,32 @@ def main(argv=None):
                 ix.once()
             except Exception as e:                      # keep serving; launchd would only restart the same fault
                 print("pass failed: %s" % type(e).__name__, file=sys.stderr)
+            w = wiki_pass(ix)
+            if w.get("error"):
+                print("wiki failed: %s" % w["error"], file=sys.stderr)
             time.sleep(POLL_S)
     elif a.cmd == "status":
         print(json.dumps(ix.status(), indent=1))
     elif a.cmd == "search":
         for r in ix.search(" ".join(a.args)):
             print("%s %s %s: %s" % (r[2][:16], r[0], r[1][:8], r[3].replace("\n", " ")))
+    elif a.cmd == "wiki":
+        print(json.dumps(wiki_pass(ix)))
     elif a.cmd == "rebuild":
         ix.rebuild_index()
     elif a.cmd == "spotlight":
-        print("never-index marker:", spotlight(ix.root, (a.args or ["on"])[0] == "off"))
+        r = spotlight(ix.root, (a.args or ["on"])[0] == "off", probe_s=a.probe_seconds)
+        print(json.dumps(r, indent=1))
+        if r.get("warning"):
+            print("WARNING: " + r["warning"], file=sys.stderr)
     elif a.cmd == "purge":
         if not a.yes or not (a.all or a.session):
             sys.exit("purge: needs --session ID or --all, and --yes (operator shell command; deletes vault files)")
         print("purged", ix.purge(a.session, a.all))
+        if a.vault:
+            print("purged vault", purge_vault(a.session, a.all))
     elif a.cmd == "plist":
-        print(PLIST.format(script=os.path.abspath(__file__), log=os.path.join(ix.cache, "log")))
+        print(PLIST.format(script=os.path.abspath(__file__), log=os.path.join(ix.cache, "log"), root=_xml(ix.root)))
     elif a.cmd == "install":
         print(json.dumps(install(ix), indent=1))
     else:

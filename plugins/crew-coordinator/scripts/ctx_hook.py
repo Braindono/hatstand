@@ -1,6 +1,6 @@
 """Context gauge + state-note hook (PostToolUse + UserPromptSubmit). Costs 0 model tokens unless it injects.
 
-Gauge: exact ctx from the transcript's last usage record, per-model window (window_for).
+Gauge: exact ctx from the transcript's last usage record; window by ROLE only (0.17.0, R-059, D-2b929): see limits().
 hr 0.12.2 (design specs/2026-09-30-design-hr-0.12.2-restore.md): absolute thresholds win: ctx_plan_tokens
 (130k) / ctx_handoff_tokens (160k), config keys, 0 = off -> the older pct bands ctx_plan/ctx_handoff of working
 headroom (ctx_mode baseline|absolute). Defaults live here too: cloud hooks see no config (F1).
@@ -21,16 +21,14 @@ import tempfile
 import time
 from datetime import datetime
 
-# D-5d771 (amended by D-8ee87): plan/handoff are a share of the surface's window; window per model x surface.
+# 0.17.0 (R-059, D-2b929): the model never sets a context threshold. Window = the role's window (DEFAULT_ROLE_WINDOWS
+# or config ctx_role_windows), else DEFAULT_WINDOW (config ctx_window), on every surface; plan/handoff 60%/80%.
 # Haiku is always an ephemeral subagent: "silent" = no plan or handoff point, the hook prints no ctx text.
-SURFACES = ("code", "chat", "cowork")
-CTX_TABLE = {
-    "claude-opus-5-5": {"plan": 0.60, "handoff": 0.80,
-                        "window": {"code": 500000, "chat": 500000, "cowork": 500000}},    # code unmeasured, conservative (0.16.3 reverts the 0.16.2 change)
-    "claude-sonnet-5-5": {"plan": 0.60, "handoff": 0.80,
-                          "window": {"code": 1000000, "chat": 500000, "cowork": 500000}},  # measured
-    "claude-haiku": {"silent": True, "window": {"code": 200000, "chat": 200000, "cowork": 200000}},
-}
+SURFACES = ("code", "chat", "cowork")      # still reported (surface_src), no longer used for windows
+SILENT_MODELS = ("claude-haiku",)          # prefix match
+DEFAULT_WINDOW = 500000                    # the one Cowork window for every role outside the 1M list
+HAIKU_WINDOW = 200000                      # informational only (Haiku is silent)
+LEGACY_CTX_KEYS = ("ctx_table", "ctx_window_by_model")   # ignored since 0.17.0
 # 0.16.3: roles that run with a 1M window on any surface and model (operator 10-23). fnmatch on the CURRENT role name;
 # config ctx_role_windows replaces this map (an empty map switches the feature off).
 DEFAULT_ROLE_WINDOWS = {"*-coder": 1000000, "envoy": 1000000, "curator": 1000000}
@@ -222,43 +220,30 @@ def role_window(role, c=None):
 
 
 def limits(model=None, path=None, c=None, role=None):
-    """-> {window, plan, handoff (share), plan_tok, handoff_tok (0 = off), silent, surface}.
-    Table value by model prefix x surface; config ctx_table merges over it, ctx_window_by_model (flat) wins for
-    any surface, ctx_plan_tokens / ctx_handoff_tokens > 0 override the thresholds. Unlisted model:
-    HARNESS_CTX_WINDOW or config ctx_window or 200k, shares from config ctx_plan / ctx_handoff (default 60/80)."""
+    """-> {window, plan, handoff (share), plan_tok, handoff_tok (0 = off), silent, surface, role_window}.
+    0.17.0 (R-059, D-2b929): window by role only. A role matching ctx_role_windows (default *-coder, envoy, curator:
+    1M) gets that window; every other role, or no role yet, gets config ctx_window (default 500k). Model and surface
+    do not change it (the per-model CTX_TABLE, ctx_table and ctx_window_by_model are gone; those keys are ignored).
+    Haiku stays silent. Shares: config ctx_plan / ctx_handoff (default 0.60 / 0.80); ctx_plan_tokens /
+    ctx_handoff_tokens > 0 override the thresholds."""
     c = home_cfg() if c is None else c
     surf = surface(path)
-    table = {k: {**v, "window": dict(v.get("window") or {})} for k, v in CTX_TABLE.items()}
-    for k, v in (c.get("ctx_table") or {}).items():
-        if isinstance(v, dict):
-            row = table.setdefault(k, {"window": {}})
-            row.update({x: y for x, y in v.items() if x != "window"})
-            if isinstance(v.get("window"), dict):
-                row["window"].update(v["window"])
-    key = _longest(table, model)
-    row = table.get(key) if key else None
-    if row:
-        wins = [int(x) for x in row["window"].values()] or [int(c.get("ctx_window", 200000))]
-        w = int(row["window"].get(surf) or min(wins))
-        plan, hand, silent = float(row.get("plan", 0.6)), float(row.get("handoff", 0.8)), bool(row.get("silent"))
-    else:
-        w = int(os.environ.get("HARNESS_CTX_WINDOW") or c.get("ctx_window", 200000))
-        plan, hand, silent = float(c.get("ctx_plan", 0.6)), float(c.get("ctx_handoff", 0.8)), False
-    role = role or CURRENT_ROLE
-    rw = role_window(role, c) if not (row or {}).get("silent") else None
-    if rw:    # 0.16.3: the role's window replaces the table window; flat overrides below still win
-        w = rw
-    over = c.get("ctx_window_by_model") or {}
-    ok = _longest(over, model)
-    if ok:
-        w = int(over[ok])
-        rw = None
+    m = str(model or "").lower()
+    silent = any(m.startswith(p) for p in SILENT_MODELS)
+    rw = None if silent else role_window(role or CURRENT_ROLE, c)
+    try:
+        default_w = int(c.get("ctx_window") or DEFAULT_WINDOW)
+    except (TypeError, ValueError):
+        default_w = DEFAULT_WINDOW
+    w = HAIKU_WINDOW if silent else (rw or default_w)
+    plan, hand = float(c.get("ctx_plan", 0.6)), float(c.get("ctx_handoff", 0.8))
     pt = 0 if silent else int(w * plan)
     nt = 0 if silent else int(w * hand)
-    pt = int(c.get("ctx_plan_tokens") or 0) or pt
-    nt = int(c.get("ctx_handoff_tokens") or 0) or nt
+    if not silent:
+        pt = int(c.get("ctx_plan_tokens") or 0) or pt
+        nt = int(c.get("ctx_handoff_tokens") or 0) or nt
     return {"window": w, "plan": plan, "handoff": hand, "plan_tok": pt, "handoff_tok": nt,
-            "silent": silent, "surface": surf}
+            "silent": silent, "surface": surf, "role_window": rw}
 
 
 def window_for(model=None, c=None, path=None, role=None):

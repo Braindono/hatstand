@@ -220,9 +220,9 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.vaults(), [])
 
     def test_spotlight_marker_and_plist_and_install_blocked(self):
-        self.assertTrue(T.spotlight(self.ix.root, True))
-        self.assertFalse(T.spotlight(self.ix.root, False))
-        p = T.PLIST.format(script="/x/transcript_indexer.py", log="/x/log")
+        self.assertTrue(T.spotlight(self.ix.root, True, probe_s=0)["marker"])      # 0.17.0: a dict; probe off in tests
+        self.assertFalse(T.spotlight(self.ix.root, False)["marker"])
+        p = T.PLIST.format(script="/x/transcript_indexer.py", log="/x/log", root="/x/Transcripts.noindex")
         for needle in ("com.harness.indexer", "<string>-I</string>", "KeepAlive", "LowPriorityIO", "ThrottleInterval"):
             self.assertIn(needle, p)
 

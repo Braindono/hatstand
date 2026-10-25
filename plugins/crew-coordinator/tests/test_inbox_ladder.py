@@ -77,7 +77,9 @@ class SendHint(unittest.TestCase):
         r = self.h.send(self.a, self.b, "do x", kind="task")
         self.assertEqual(r["ladder"]["waits"], [15, 30, 30, 40, 40, 40])
         self.assertEqual(r["ladder"]["end"], f"still waiting on {r['id']}")
-        self.assertEqual(r["ladder"]["total_s"], 195)
+        self.assertEqual(sum(r["ladder"]["waits"]), 195)          # 0.17.0 (R-055): total_s dropped, the waits say it
+        self.assertNotIn("rungs", r["ladder"])
+        self.assertLess(len(r["ladder"]["how"]), 100)
         for k in ("notice", "result", "message"):
             self.assertNotIn("ladder", self.h.send(self.a, self.b, "fyi", kind=k))
         self.assertIn("ladder", self.h.send(self.a, self.b, "q?", kind="question"))
@@ -86,7 +88,7 @@ class SendHint(unittest.TestCase):
         open(os.path.join(self.home, "OPERATOR-PREFERENCES.md"), "w").write("- inbox-ladder: off\n")
         self.assertNotIn("ladder", self.h.send(self.a, self.b, "do x", kind="task"))
         open(os.path.join(self.home, "OPERATOR-PREFERENCES.md"), "w").write("inbox-ladder: 10,50\n")
-        self.assertEqual(self.h.send(self.a, self.b, "do y", kind="task")["ladder"]["rungs"], [[10], [25, 25]])
+        self.assertEqual(self.h.send(self.a, self.b, "do y", kind="task")["ladder"]["waits"], [10, 25, 25])
 
 
 class StopReminder(unittest.TestCase):

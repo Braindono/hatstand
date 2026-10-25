@@ -6,6 +6,7 @@ description: Light sync, inbox and Do-lines only. Use for "/refresh", "check mai
 # /refresh
 
 Cheap check between tasks (D-b9225 C4). For plugin health, config or drift use /update.
+Run harness_inbox at the start AND at the end of every reply.
 
 1. No short id in context: `harness_register` first.
 2. Call `harness_sync agent=<id> do_only=true`. Pass `ctx=<your token estimate>` (and `base=<n>` if the ctx hook message gave one) if you can.

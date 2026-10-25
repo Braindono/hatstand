@@ -1,0 +1,40 @@
+{
+  "_about": "Crew Coordinator shared config. 'workspaces': project folders whose files agents claim and version (the Exchange folder itself is always included). 'watch': extra operator files that /update reports on when they change.",
+  "workspaces": [],
+  "allowed_roots": [
+    "~/Claude/Projects"
+  ],
+  "watch": [],
+  "bind_mode": "warn",
+  "fleet_window_h": 12,
+  "plugin_drift_h": 6,
+  "marketplace_name": "harness-local",
+  "ctx_plan_tokens": 0,
+  "ctx_handoff_tokens": 0,
+  "restore_budget": 2000,
+  "auto_reload": false,
+  "vault": "off",
+  "vault_model": "haiku",
+  "handoff_gate": "warn",
+  "digest_growth_max": 1.2,
+  "restore_lessons": 3,
+  "restore_lesson_tokens": 90,
+  "digest_caps": {
+    "envoy": 1794,
+    "curator": 1794
+  },
+  "digest_ceiling_tokens": null,
+  "curation_roles": {
+    "envoy": [
+      "archive",
+      "unarchive",
+      "pin",
+      "pin_corpus_index",
+      "retag"
+    ],
+    "steward": [
+      "archive",
+      "unarchive"
+    ]
+  }
+}

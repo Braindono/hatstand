@@ -33,6 +33,16 @@ _CTRL = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-
 _CTRL_ML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff\u27e6\u27e7]")
 
 
+def tag_list(tags):
+    """0.17.0 (H-013): a tags value given as one string is split on commas and whitespace, never into characters
+    ("a-b" -> ["a-b"], "a-b, c" -> ["a-b", "c"]); a list is kept as it is."""
+    if tags is None:
+        return []
+    if isinstance(tags, str):
+        return [t for t in re.split(r"[,\s]+", tags) if t]
+    return [str(t) for t in tags]
+
+
 def clean_text(s, cap=400, multiline=False):
     """Untrusted-text hygiene (0.15.0): strip control characters (and bidi/zero-width marks), keep \\n and \\t only when
     the field is multiline (single-line fields get a space instead), and cap the length (ellipsis marks a cut)."""
@@ -425,7 +435,7 @@ class Corpus:
         expires = None   # note and context expire by default; decision, capsule, role-state and foundation do not
         if tier == "ephemeral" and kind in ("note", "context"):
             expires = today(self.h.expiry_days(project))
-        data = {"id": cid, "kind": kind, "title": title, "body": body, "tags": [t.strip().lower() for t in (tags or []) if t.strip()],
+        data = {"id": cid, "kind": kind, "title": title, "body": body, "tags": [t.strip().lower() for t in tag_list(tags) if t.strip()],
                 "project": project, "refs": [str(r) for r in (refs or [])], "supersedes": supersedes, "offload": bool(offload), "sha": sha,
                 "model": model or "unknown",
                 "role": role or "unassigned", "tier": tier, "expires": expires}
@@ -438,8 +448,11 @@ class Corpus:
 
     # ------------------------------------------------------------- read
     def _filters(self, kind=None, tags=None, project=None, since_seq=None, include_superseded=False, offload=None,
-                 exclude_by=None):
+                 exclude_by=None, exclude_tags=None):
         w, a = [], []
+        for t in (exclude_tags or []):   # 0.17.0 (R-041): ruled-out notes live in their own recall tier
+            w.append("(' '||e.tags||' ') NOT LIKE ?")
+            a.append(f"% {t.lower()} %")
         if exclude_by:   # N-39193: an agent's /update must not count its own entries as new
             w.append(f"e.agent_name NOT IN ({','.join('?' * len(exclude_by))})")
             a += list(exclude_by)
@@ -463,11 +476,16 @@ class Corpus:
             a.append(1 if offload else 0)
         return w, a
 
-    def search(self, query=None, limit=5, **flt):
+    def search(self, query=None, limit=5, offset=0, **flt):
+        """0.17.0 (R-065): `offset` pages past the 100-row clamp (search_all walks every page)."""
         try:   # 0.15.3 (P7): a caller-supplied limit is clamped (negative LIMIT means "no limit" in sqlite)
             limit = max(1, min(int(limit), 100))
         except (TypeError, ValueError):
             limit = 5
+        try:
+            offset = max(0, int(offset or 0))
+        except (TypeError, ValueError):
+            offset = 0
         self.refresh()
         w, a = self._filters(**flt)
         where = (" AND " + " AND ".join(w)) if w else ""
@@ -476,8 +494,8 @@ class Corpus:
             match = " OR ".join('"' + t.replace('"', "") + '"' for t in terms)
             sql = (f"SELECT e.id,e.kind,e.title,e.tags,e.agent_name,e.ts,e.tokens,e.offload,e.superseded_by,e.expires "
                    f"FROM fts JOIN entries e ON e.id=fts.id WHERE fts MATCH ?{where} "
-                   f"ORDER BY bm25(fts, 0, 8.0, 1.0, 4.0) LIMIT ?")
-            rows = self.db.execute(sql, [match] + a + [limit]).fetchall()
+                   f"ORDER BY bm25(fts, 0, 8.0, 1.0, 4.0), e.id LIMIT ? OFFSET ?")
+            rows = self.db.execute(sql, [match] + a + [limit, offset]).fetchall()
         elif terms:  # portable fallback: weighted term counts
             rows = self.db.execute(f"SELECT e.id,e.kind,e.title,e.tags,e.agent_name,e.ts,e.tokens,e.offload,e.superseded_by,e.expires,"
                                    f"lower(e.title||' '||e.tags), lower(e.body) FROM entries e WHERE 1=1{where}", a).fetchall()
@@ -486,11 +504,38 @@ class Corpus:
                 s = sum(r[10].count(t) * 4 + r[11].count(t) for t in terms)
                 if s:
                     scored.append((s, r[:10]))
-            rows = [r for _, r in sorted(scored, key=lambda x: -x[0])[:limit]]
+            rows = [r for _, r in sorted(scored, key=lambda x: (-x[0], x[1][0]))[offset:offset + limit]]
         else:
             rows = self.db.execute(f"SELECT e.id,e.kind,e.title,e.tags,e.agent_name,e.ts,e.tokens,e.offload,e.superseded_by,e.expires "
-                                   f"FROM entries e WHERE 1=1{where} ORDER BY e.seq DESC, e.ts DESC LIMIT ?", a + [limit]).fetchall()
+                                   f"FROM entries e WHERE 1=1{where} ORDER BY e.seq DESC, e.ts DESC, e.id LIMIT ? OFFSET ?", a + [limit, offset]).fetchall()
         return [dict(zip(("id", "kind", "title", "tags", "by", "ts", "tokens", "offload", "superseded_by", "expires"), r)) for r in rows]
+
+    def entry_state(self, entry_id):
+        """0.17.0 (R-041): live | superseded | archived | missing (log entries only)."""
+        self.refresh()
+        r = self.db.execute("SELECT superseded_by FROM entries WHERE id=? AND source='log'", (entry_id,)).fetchone()
+        if not r:
+            return "missing"
+        return "live" if not r[0] else ("archived" if r[0] == "archived" else "superseded")
+
+    def tagged_notes(self, tag, limit=200):
+        """0.17.0 (R-066/R-041): live notes carrying `tag`, newest first, with author and role-at-write.
+        -> [{id, title, body, tags, agent, role, ts, seq}]"""
+        self.refresh()
+        rows = self.db.execute("SELECT id,title,body,tags,agent,role,ts,seq FROM entries WHERE kind='note' AND superseded_by='' "
+                               "AND (' '||tags||' ') LIKE ? ORDER BY seq DESC, id LIMIT ?",
+                               (f"% {tag.lower()} %", max(1, int(limit)))).fetchall()
+        return [dict(zip(("id", "title", "body", "tags", "agent", "role", "ts", "seq"), r)) for r in rows]
+
+    def search_all(self, query=None, page=100, cap=5000, **flt):
+        """0.17.0 (R-065): every match, paged in steps of `page` (the clamp), at most `cap` rows."""
+        out = []
+        while len(out) < cap:
+            rows = self.search(query, limit=page, offset=len(out), **flt)
+            out += rows
+            if len(rows) < page:
+                break
+        return out[:cap]
 
     def count(self, **flt):
         self.refresh()
@@ -507,7 +552,8 @@ class Corpus:
             if not r:
                 out.append(f"{i}: not found")
                 continue
-            head = (f"{r[0]} {r[1]} · {clean_text(r[2], 300)}" + (f" [{clean_text(r[4], 200)}]" if r[4] else "")
+            rej = "REJECTED, not advice · " if "ruled-out" in (r[4] or "").split() else ""   # 0.17.0 (R-041)
+            head = (f"{rej}{r[0]} {r[1]} · {clean_text(r[2], 300)}" + (f" [{clean_text(r[4], 200)}]" if r[4] else "")
                     + f" · {clean_text(r[5], 60)} {clean_text(r[6], 40)[:10]}")   # 0.15.1 (P6): titles/tags/names are file- or peer-written
             if r[8]:
                 head += f" · supersedes {clean_text(r[8], 200)}"

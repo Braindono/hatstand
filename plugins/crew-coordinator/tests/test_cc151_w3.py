@@ -266,8 +266,9 @@ class Containment(Base):
         pc = H.path_config(self.home)
         self.assertEqual(pc["workspaces"], [inside])
         self.assertEqual(pc["allowed_roots"], [])
-        self.assertTrue(any(f"workspace {out} ignored: outside ceiling" in w for w in pc["warnings"]))
-        self.assertIn("workspace " + out + " ignored: outside ceiling", self.h.health(as_text=True))
+        self.assertTrue(any("config.json workspaces[0] ignored: outside the ceiling" in w for w in pc["warnings"]))   # 0.17.0: no value
+        self.assertFalse(any(out in w for w in pc["warnings"]))
+        self.assertIn("config.json workspaces[0] ignored: outside the ceiling", self.h.health(as_text=True))
         self.opfile({"workspaces": [out], "allowed_roots": [out], "brief_hosts": ["b.example"]})
         pc = H.path_config(self.home)
         self.assertIn(out, pc["workspaces"])

@@ -81,10 +81,9 @@ def ladder_hint(kind, msg_id, rungs, cfg=None, model=None, env=None):
         return None
     mw = max_wait(cfg)
     p = plan(rungs, mw)
-    return {"rungs": p, "waits": [c for r in p for c in r], "max_wait": mw, "total_s": total_seconds(p),
-            "stop_at_first_mail": True, "end": f"still waiting on {msg_id}",
-            "how": "harness_inbox wait=<n> for each n in waits; stop at the first call that returns mail and answer it; "
-                   "after the last empty call end the turn with `end`. The last empty call is your end-of-reply inbox call."}
+    # 0.17.0 (R-055): one short instruction; `rungs` and `total_s` dropped from the reply (the waits say it)
+    return {"waits": [c for r in p for c in r], "max_wait": mw, "end": f"still waiting on {msg_id}",
+            "how": "harness_inbox wait=<n> per wait, stop at the first mail and answer it; all empty: end with `end`"}
 
 
 def run(inbox, p, msg_id):

@@ -22,7 +22,8 @@ WAKE_TOOLS = ("harness_inbox", "harness_send", "harness_sync", "harness_recall",
 WAKE_ADMIN = ("whoami", "ledger", "thread", "status", "roster", "task_update", "listen")
 WAKE_RECORD_KINDS = ("note", "context")
 
-DEFAULTS = {"nudge_per_agent_hour": 6, "nudge_per_pair_hour": 3, "global_per_hour": 12,
+# 0.17.0 (R-055): caps raised for release work (W43: 123 nudges skipped on caps vs 97 sent; 91 global, 28 pair)
+DEFAULTS = {"nudge_per_agent_hour": 10, "nudge_per_pair_hour": 6, "global_per_hour": 30,
             "interval_min": 10, "max_per_hour": 6, "expire_h": 12, "wake_window_min": 15}
 BOUNDS = {"nudge_per_agent_hour": (1, 60), "nudge_per_pair_hour": (1, 30), "global_per_hour": (1, 120),
           "interval_min": (5, 120), "max_per_hour": (1, 12), "expire_h": (1, 48), "wake_window_min": (5, 60)}

@@ -1,4 +1,5 @@
-"""cc 0.16.2 item 11: context windows by model and surface. Run: python3 -B tests/test_cc162_ctx_windows.py"""
+"""Context windows (0.16.2 item 11, replaced by 0.17.0 R-059): neither model nor surface changes a window.
+Run: python3 -B tests/test_cc162_ctx_windows.py"""
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import _env  # noqa: F401  isolate HOME and HARNESS_* first
@@ -15,14 +16,15 @@ def lim(model, surf):
     with mock.patch.dict(os.environ, env, clear=False):
         if not surf:
             os.environ.pop("HARNESS_SURFACE", None)
+        C.CURRENT_ROLE = None
         return C.limits(model, None, {})
 
 
 class Windows(unittest.TestCase):
-    def test_code_window_sonnet_1m_opus_back_to_500k(self):      # 0.16.3 reverts the 0.16.2 Opus change
-        l = lim("claude-sonnet-5-5", "code")
-        self.assertEqual((l["window"], l["plan_tok"], l["handoff_tok"]), (1000000, 600000, 800000))
-        self.assertEqual(lim("claude-opus-5-5", "code")["window"], 500000)
+    def test_code_surface_no_longer_raises_the_window(self):     # 0.17.0 R-059: no role -> 500k for every model
+        for m in ("claude-sonnet-5-5", "claude-opus-5-5"):
+            l = lim(m, "code")
+            self.assertEqual((l["window"], l["plan_tok"], l["handoff_tok"]), (500000, 300000, 400000), m)
 
     def test_chat_and_cowork_keep_the_smaller_window(self):
         for surf in ("chat", "cowork"):

@@ -1,0 +1,389 @@
+{
+ "tools": [
+  {
+   "name": "harness_register",
+   "description": "Register; returns banner. project required (successors inherit). successor_of after compaction. model=your exact model id from your env; pass it even if a cached schema lacks it. role=<role> for no-carry roles (auto-takes it).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "expertise": {
+      "type": "string"
+     },
+     "task": {
+      "type": "string"
+     },
+     "project": {
+      "type": "string"
+     },
+     "successor_of": {
+      "type": "string"
+     },
+     "confirmed": {
+      "type": "boolean"
+     },
+     "model": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string"
+     }
+    },
+    "required": []
+   }
+  },
+  {
+   "name": "harness_sync",
+   "description": "/update: first line = status; then Do/Changed. ctx=your token estimate (+base= if the ctx hook gave one); full=old card; do_only=/refresh.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "description": "your short id"
+     },
+     "mark": {
+      "type": "boolean"
+     },
+     "ctx": {
+      "type": "integer"
+     },
+     "base": {
+      "type": "integer"
+     },
+     "full": {
+      "type": "boolean"
+     },
+     "do_only": {
+      "type": "boolean"
+     },
+     "state_note": {
+      "type": "string"
+     },
+     "topic": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent"
+    ]
+   }
+  },
+  {
+   "name": "harness_send",
+   "description": "Message. to: id|name|list|role:x|group:x|*|operator. reply_to continues thread. kind: message|task|handoff|result|question|notice|review. state_note=role state \u22641200 chars.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "description": "your short id"
+     },
+     "to": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     },
+     "subject": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "reply_to": {
+      "type": "string"
+     },
+     "refs": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "state_note": {
+      "type": "string"
+     },
+     "topic": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent",
+     "to",
+     "body"
+    ]
+   }
+  },
+  {
+   "name": "harness_inbox",
+   "description": "Unread mail. wait=secs long-poll.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "description": "your short id"
+     },
+     "wait": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "agent"
+    ]
+   }
+  },
+  {
+   "name": "harness_claim",
+   "description": "Lease file(s) before editing; returns version. path may be a list (Haiku agents: max 2 files per call, P-40).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "description": "your short id"
+     },
+     "path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       }
+      ]
+     },
+     "intent": {
+      "type": "string"
+     },
+     "ttl": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "agent",
+     "path"
+    ]
+   }
+  },
+  {
+   "name": "harness_release",
+   "description": "Release lease (no path = all).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "description": "your short id"
+     },
+     "path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent"
+    ]
+   }
+  },
+  {
+   "name": "harness_commit",
+   "description": "Record file version after edit.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "description": "your short id"
+     },
+     "path": {
+      "type": "string"
+     },
+     "base_version": {
+      "type": "integer"
+     },
+     "note": {
+      "type": "string"
+     },
+     "state_note": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent",
+     "path"
+    ]
+   }
+  },
+  {
+   "name": "harness_record",
+   "description": "Save to shared corpus. kind: decision|context|capsule|note. title=1-line summary. offload=true before compaction. Cite by id after.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "description": "your short id"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "supersedes": {
+      "type": "string"
+     },
+     "offload": {
+      "type": "boolean"
+     },
+     "role": {
+      "type": "string"
+     },
+     "tier": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent",
+     "kind",
+     "title"
+    ]
+   }
+  },
+  {
+   "name": "harness_recall",
+   "description": "Search corpus -> 1-line cards (limit<=25 per page; offset= pages on). ids -> full text within budget tokens; m-/t-/#N/8-hex ids -> event cards. kind=transcript (+agent=): local chat transcripts.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     },
+     "ids": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "kind": {
+      "type": "string"
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "project": {
+      "type": "string"
+     },
+     "budget": {
+      "type": "integer"
+     },
+     "agent": {
+      "type": "string",
+      "description": "your short id"
+     },
+     "limit": {
+      "type": "integer"
+     },
+     "offset": {
+      "type": "integer"
+     }
+    },
+    "required": []
+   }
+  },
+  {
+   "name": "harness_restore",
+   "description": "/restore: take over a role in a fresh chat. Returns banner + digest. confirmed=true if the holder was seen <10 min ago. capsule=<Exchange path> shows that capsule instead of the lineage pick.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "role": {
+      "type": "string"
+     },
+     "model": {
+      "type": "string"
+     },
+     "project": {
+      "type": "string"
+     },
+     "task": {
+      "type": "string"
+     },
+     "confirmed": {
+      "type": "boolean"
+     },
+     "capsule": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "role",
+     "model"
+    ]
+   }
+  },
+  {
+   "name": "harness_handoff",
+   "description": "One-call handoff: optional capsule_md file, state_note, kind=handoff (to defaults to operator). Leases stay for /restore unless release=true. Returns the bootstrap line.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "description": "your short id"
+     },
+     "capsule_md": {
+      "type": "string"
+     },
+     "state_note": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     },
+     "release": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "agent"
+    ]
+   }
+  },
+  {
+   "name": "harness_admin",
+   "description": "ops: whoami,ledger,thread,status,set_expertise,task_update,group,retire,set_project,roster,role_define,role_assign,release_scope,registry,verify,export,reload,health,archive,unarchive,pin,approvals,flag_release,publish_release,pin_corpus_index,retag,listen. args per protocol skill.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "op": {
+      "type": "string"
+     },
+     "agent": {
+      "type": "string"
+     },
+     "args": {
+      "type": "object"
+     }
+    },
+    "required": [
+     "op"
+    ]
+   }
+  }
+ ]
+}

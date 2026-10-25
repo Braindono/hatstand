@@ -1,0 +1,9 @@
+---
+description: "protocol \u00a73: harness_inbox at the start and the end of each reply"
+tags: ["cc170"]
+max_turns: 12
+timeout_seconds: 240
+allowed_tools: ["Read", "Glob", "Grep", "Skill"]
+append_system_prompt: "Harness agent Test Wren #abcd1234 holds role ops-coder in project harness-ops (banner already shown by the hook). Pass agent=\"abcd1234\" to harness_* tools. Rules: protocol skill."
+---
+In one sentence: what is a lease in this harness?

@@ -63,18 +63,18 @@ class Nudge(DB):
     def test_sender_cap_per_hour(self):
         self.op["doorbell"] = {"nudge_per_pair_hour": 30, "global_per_hour": 120}
         n = 0
-        for i in range(8):
+        for i in range(12):
             r = self.send(self.a, [self.b, self.c][i % 2], body=f"x{i}")
             n += "nudge" in r
-        self.assertEqual(n, 6)
+        self.assertEqual(n, 10)        # 0.17.0 (R-055): default sender cap 10/h (was 6)
         self.assertTrue(any("sender cap" in e["data"]["reason"] for e in self.ev("nudge.skipped")))
 
     def test_ping_pong_stops_at_pair_cap(self):
         sent = 0
-        for i in range(8):
+        for i in range(10):
             frm, to = (self.a, self.b) if i % 2 == 0 else (self.b, self.a)
             sent += "nudge" in self.send(frm, to, kind="question", body=f"ack {i}")
-        self.assertEqual(sent, 3)     # default pair cap, counted both directions
+        self.assertEqual(sent, 6)     # default pair cap (0.17.0: 6, was 3), counted both directions
         self.assertTrue(any("pair cap" in e["data"]["reason"] for e in self.ev("nudge.skipped")))
 
     def test_global_cap(self):
@@ -92,7 +92,7 @@ class Nudge(DB):
         r = self.send(self.a, self.b, body="do it")
         box = self.h.inbox(self.b, unread_only=True, mark_read=False)
         self.assertEqual(box["owed"], [r["id"]])
-        self.assertIn("owed reply: " + r["id"], box["text"])
+        self.assertIn("owed reply 1: " + r["id"], box["text"])   # 0.17.0 (R-055): count + newest 3
 
 
 class Listen(DB):

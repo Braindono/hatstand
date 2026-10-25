@@ -263,7 +263,7 @@ class Approvals(Base):
         c = self.agent()
         self.as_(a)
         seen = {}
-        seen["publish_override"] = self.adm("publish_release", a, override="ship it", path=self.tmp)
+        seen["publish_override"] = self.adm("publish_release", a, override="ship it", path=self.home)   # 0.17.0: confined
         seen["flag_release"] = self.adm("flag_release", a, name="zzz", external=True)
         n = self.note(a)
         seen["archive_operator"] = self.adm("archive", a, ids=[n], reason='"rule line text"')
@@ -284,6 +284,11 @@ class Approvals(Base):
         self.as_(c)
         seen["task_update_other"] = self.adm("task_update", c, task_id=tid, state="working")
         seen["tier_foundation"] = M.call(self.h, "harness_record", {"agent": c, "kind": "note", "title": "f", "tier": "foundation"})
+        cur = self.agent("curator")      # 0.17.0 (R-048): a non-envoy push after a clean dry run is an approval request
+        os.makedirs(os.path.join(self.home, "_harness", "marketplace"), exist_ok=True)
+        self.h.store.append("hatstand.synced", cur, {"mode": "dry", "exit": 0, "marketplace": self.h._marketplace_sha()})
+        self.as_(cur)
+        seen["hatstand_push"] = self.adm("hatstand_sync", cur, push=True)
         self.assertEqual(set(seen), set(H.Harness.APPROVAL_ACTIONS))
         for action, r in seen.items():
             self.assertEqual((r.get("action"), r["pending"][:2]), (action, "A-"), (action, r))
@@ -351,6 +356,11 @@ class Gates(Base):
 
     def test_override_via_approval_and_caller_logged(self):
         h = self.h2
+        # 0.17.0 (R-053): an MCP publish path must sit under the home, a workspace or an allowed root
+        root_ = os.path.dirname(os.path.commonpath([os.path.realpath(self.plug), os.path.realpath(self.pkg)]))
+        op_ = mock.patch.object(H, "_operator_file", return_value=({"allowed_roots": [root_], "release_scope_gate": False}, []))
+        op_.start()
+        self.addCleanup(op_.stop)
         a = h.register(project="orch", model=MODEL)["id"]
         M.BOUND.update(home=h.home, id=a)
         r = M.call(h, "harness_admin", {"op": "publish_release", "agent": a,

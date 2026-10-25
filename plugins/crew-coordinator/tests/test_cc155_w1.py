@@ -34,7 +34,8 @@ class Surface(unittest.TestCase):
     def test_desktop_home_paths_are_code(self):
         for p in ("/Users/x/.claude/projects/-p/abc.jsonl", "/home/bob/.claude/projects/-p/abc.jsonl"):
             self.assertEqual(C.surface_src(p), ("code", "path"), p)
-        self.assertEqual(C.limits(SONNET, "/Users/x/.claude/projects/-p/a.jsonl")["window"], 1000000)
+        C.CURRENT_ROLE = None
+        self.assertEqual(C.limits(SONNET, "/Users/x/.claude/projects/-p/a.jsonl")["window"], 500000)   # 0.17.0: surface ignored
 
     def test_cowork_path(self):
         p = "/Users/x/Library/Application Support/Claude/local-agent-mode-sessions/a/b/.claude/projects/-p/abc.jsonl"
@@ -55,18 +56,17 @@ class SyncLines(Base):
         self.addCleanup(self._e2.stop)
         os.environ.pop("HARNESS_SURFACE", None)
 
-    def test_unknown_always_explicit_once(self):
+    def test_window_line_once_per_session_surface_irrelevant(self):     # 0.17.0 R-059
         a = self.h.register(project="orch", model=MODEL)["id"]
         t1 = self.h.sync(a, ctx=10000)["text"]
         t2 = self.h.sync(a, ctx=10000)["text"]
-        self.assertRegex(t1, r"ctx surface: unknown \(unknown\), plan 300k, handoff 400k")
-        self.assertIn("ctx surface: unknown", t2)          # always when unknown
+        self.assertRegex(t1, r"ctx window: 500k \(default; no role yet\), plan 300k, handoff 400k")
+        self.assertNotIn("ctx window", t2)                 # once per session
+        self.assertNotIn("HARNESS_SURFACE", t1)            # no surface hint any more
         with mock.patch.dict(os.environ, {"HARNESS_SURFACE": "code"}):
             b = self.h.register(project="orch", model=MODEL)["id"]
             u1 = self.h.sync(b, ctx=10000)["text"]
-            u2 = self.h.sync(b, ctx=10000)["text"]
-        self.assertIn("ctx surface: code (explicit), plan 600k, handoff 800k", u1)
-        self.assertNotIn("ctx surface", u2)                # once per session when known
+        self.assertIn("ctx window: 500k (default; no role yet), plan 300k, handoff 400k", u1)
 
     def test_unmeasured_and_haiku_silent(self):
         a = self.h.register(project="orch", model=MODEL)["id"]
@@ -74,7 +74,7 @@ class SyncLines(Base):
         self.assertNotIn("ctx unmeasured", self.h.sync(a, ctx=5000)["text"])
         hk = self.h.register(project="orch", model=HAIKU)["id"]
         t = self.h.sync(hk)["text"]
-        self.assertNotIn("ctx surface", t)
+        self.assertNotIn("ctx window", t)
         self.assertNotIn("ctx unmeasured", t)
 
 

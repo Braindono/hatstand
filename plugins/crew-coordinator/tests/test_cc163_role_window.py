@@ -33,9 +33,9 @@ class RoleWindow(unittest.TestCase):
             self.assertEqual(lim(SONNET, role)["window"], 500000, role)
             self.assertEqual(lim(OPUS, role)["window"], 500000, role)
 
-    def test_opus_code_window_reverted_to_unmeasured(self):
+    def test_no_role_gets_500k_on_code_for_every_model(self):     # 0.17.0 R-059 (was: Sonnet 1M by model on code)
         self.assertEqual(lim(OPUS, None, surf="code")["window"], 500000)
-        self.assertEqual(lim(SONNET, None, surf="code")["window"], 1000000)
+        self.assertEqual(lim(SONNET, None, surf="code")["window"], 500000)
 
     def test_old_role_names_resolve_through_the_alias_layer(self):
         for old in ("corpus-envoy", "skill-curation-lead", "claude-code"):
@@ -46,8 +46,8 @@ class RoleWindow(unittest.TestCase):
         self.assertEqual(lim(SONNET, "secretary", {"ctx_role_windows": {"secretary": 800000}})["window"], 800000)
         self.assertEqual(lim(SONNET, "envoy", {"ctx_role_windows": {}})["window"], 500000)
 
-    def test_flat_overrides_still_win(self):
-        self.assertEqual(lim(SONNET, "envoy", {"ctx_window_by_model": {SONNET: 300000}})["window"], 300000)
+    def test_token_overrides_win_model_keys_do_not(self):
+        self.assertEqual(lim(SONNET, "envoy", {"ctx_window_by_model": {SONNET: 300000}})["window"], 1000000)   # 0.17.0: model keys ignored
         l = lim(SONNET, "envoy", {"ctx_plan_tokens": 111000, "ctx_handoff_tokens": 222000})
         self.assertEqual((l["plan_tok"], l["handoff_tok"]), (111000, 222000))
 

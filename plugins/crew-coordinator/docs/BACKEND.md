@@ -42,8 +42,8 @@ python3 scripts/harness.py verify           # must be ok=true before migrating
 
 ## Surface and approval notes (0.15.5)
 
-- **Surface runbook.** Set `HARNESS_SURFACE=code` for envoy, curator and coder chats on the desktop Code tab; `cowork` for Cowork chats. An explicit value always wins. Without it the ctx hook trusts only a desktop-home transcript path (`/Users/<name>/.claude/projects/`, `/home/<name>/.claude/projects/`); cloud paths (`/root/...`, `/sessions/...`) and anything else count as `unknown` and get the smallest window of the model row. `harness_sync` prints `ctx surface: <x> (<explicit|path|unknown>), plan <n>k, handoff <n>k` once per session, and every time it is unknown.
-- **Opus Code window** stays 500,000 until measured. To override, add a `ctx_table` row to config.json, e.g. `{"ctx_table": {"claude-opus-5-5": {"window": {"code": 1000000}}}}`. Measure first (last usage record of a long Code chat); do not guess.
+- **Surface.** Since 0.17.0 (R-059) the surface no longer changes any context window, so `HARNESS_SURFACE` is optional; the hook still detects it (explicit value, else a desktop-home or Cowork transcript path) for other uses.
+- **Windows by model** were removed in 0.17.0 (R-059): see "Context windows by role".
 - **PreCompact stub.** The hook writes one marker file `harness-precompact-<session>-<time>-<rand>.json` (temp file, then link; never overwritten) in `~/.claude/crew-coordinator/state/` and makes no ledger call. The next `harness_sync`, `harness_register` or `harness_restore` turns it into a role-state record under topic `precompact`. It fails open and never writes anywhere else.
 - **Approval attribution.** Approval requests now need `agent=<short id>`; there is no fallback to the process binding. Residual: `agent=` is self-declared, so the harness has no per-chat authentication.
 - **Publish permission.** `publish_release` swaps registry.json with an atomic replace, so the Exchange mount must allow delete/replace for the publishing process. The verify at the end of a publish checks the package given by `--pkg`, wherever it is; a later plain `verify` still looks for the newest package beside the source.
@@ -69,8 +69,10 @@ python3 scripts/harness.py verify           # must be ok=true before migrating
 
 ## Transcript indexer (0.16.2)
 
-- Operator commands (shell): `python3 ~/Claude/scripts/transcript_indexer.py install | uninstall | status | search <terms> | spotlight off | purge --session <id>|--all --yes`. Install once; the launch agent keeps it running at low priority. The first run needs sessions to be allowed: registered chats are allowed automatically (ledger), others only if their session id is on a line of `~/Claude/Transcripts/.allow`.
-- Files: vault `~/Claude/Transcripts/*.md` (0600, directory 0700), index and state `~/.cache/harness-indexer/` (0700). The index is derived: `rebuild` recreates it from the vault. Nothing is ever sent anywhere.
+- Operator commands (shell): `python3 ~/Claude/scripts/transcript_indexer.py install | uninstall | status | search <terms> | spotlight off | purge --session <id>|--all --yes`. Install once; the launch agent keeps it running at low priority. The first run needs sessions to be allowed: registered chats are allowed automatically (ledger), others only if their session id is on a line of `~/Claude/Transcripts.noindex/.allow`.
+- Files: vault `~/Claude/Transcripts.noindex/*.md` (0600, directory 0700), index and state `~/.cache/harness-indexer/` (0700). The index is derived: `rebuild` recreates it from the vault. Nothing is ever sent anywhere.
+- Spotlight (0.17.0): the `.noindex` folder name keeps the vault out of Spotlight; the `.metadata_never_index` marker alone is ignored on macOS 26.7.1. `install` unloads the agent, renames an old `~/Claude/Transcripts` to the new root (never copies or deletes), leaves a symlink at the old path for one release, and pins the root in the plist (`INDEXER_ROOT`). `spotlight off` writes the marker, then probes with mdfind (`--probe-seconds`, default 30) and warns if Spotlight still finds a new file there.
+- `status` counts distinct denied sessions, shows `last_run_at` and `state_path`, and reports `state_error` when the state file cannot be read (a pass then refuses to run rather than re-index into the vault twice).
 - Privacy: no tool result, hook or system text, no thinking; secrets redacted before anything is written; a message marked [private]/#private is dropped; agents reach the text only through `harness_recall kind=transcript` (role-gated, fenced as data).
 - Tested limit: redaction is pattern-based and best effort, not a guarantee; keep `transcript_roles` short.
 
@@ -79,10 +81,31 @@ python3 scripts/harness.py verify           # must be ok=true before migrating
 - **State cache.** `Harness.state()` keeps the folded State and refreshes it from the new ledger lines only. Switch off with `HARNESS_STATE_CACHE=0` in the environment of the MCP server or CLI (then every call re-reads the ledger, as in 0.16.0). `verify` always re-reads the whole file. Residual risk: an older byte edited in place plus a later well-formed append is not seen by `state()` until the process restarts; `harness verify` reports it.
 - **Release scope.** Release scope (items, version, split or bundle) is the operator's decision. Before a publish: `harness_admin op=release_scope args={plugin, version, items:[...], rationale, approval_ref}`, the operator runs `python3 <harness.py> approve <A-id>`; then `publish_release` accepts the package only if the CHANGELOG section for that version names every item. Rollback of a wrong scope: record a new `release_scope` for the same (plugin, version); the newest wins. Override: `--operator-override REASON` (logged). Gate off: operator.json `"release_scope_gate": false`.
 
-## Context windows by surface (0.16.2, item 11)
+## Context windows by role (0.17.0, R-059; replaces the 0.16.2 surface table and the 0.16.3 role overlay)
 
-The hook's table gives the window per model and surface: claude-opus-5-5 and claude-sonnet-5-5 are 1,000,000 on `code` and 500,000 on `chat` and `cowork`; Haiku is 200,000 everywhere. Plan at 60% and handoff at 80% of that window. **Set `HARNESS_SURFACE=code` for every chat that runs in Claude Code** (envoy, curator, ops-coder, design-coder); without it the surface is `unknown` and the smallest window (500k) applies, so a Code chat is told to hand off at 400k instead of 800k. `harness_sync` prints `ctx surface: ...` while the surface is unknown. A `ctx_table` row in config.json or `ctx_window_by_model` still overrides the table.
+The window depends on the agent's ROLE only (operator rule D-2b929: the model never sets a context threshold). `*-coder` roles, `envoy` and `curator` have 1,000,000 tokens; every other role, and a chat whose role the hook has not learned yet, has 500,000. Plan at 60% and handoff at 80% of that window, so 600k/800k and 300k/400k. Neither the model (Sonnet, Opus, Fable) nor `HARNESS_SURFACE` changes a window; Haiku stays silent (ephemeral subagent). The hook learns the role from the harness banner of the last register/restore/whoami result in the chat. `harness_sync` prints `ctx window: <n>k (role <r> | default ...), plan <n>k, handoff <n>k` once per session.
 
-## Role-keyed context windows (0.16.3)
+Config (`Exchange/_harness/config.json`): `ctx_role_windows` edits the 1M list (`{"secretary": 800000}` adds a role; `{}` sends every role to the default); `ctx_window` sets the default window (500,000); `ctx_plan` / `ctx_handoff` the shares; `ctx_plan_tokens` / `ctx_handoff_tokens` absolute thresholds. `ctx_table` and `ctx_window_by_model` are ignored since 0.17.0.
 
-`*-coder` roles, `envoy` and `curator` have a 1M window on any surface and model, so they are warned at 600k and told to hand off at 800k. The hook learns the role from the harness banner of the last register/restore/whoami result in the chat; until then the model x surface table applies. Edit the list with `ctx_role_windows` in `Exchange/_harness/config.json` (`{"secretary": 800000}` adds a role; `{}` turns the feature off). `HARNESS_SURFACE=code` is still required for a Code chat's model x surface window (for roles outside the list); the role window does not depend on it. Claude Opus on Code is 500k (unmeasured) again.
+## Eval loop scripts (0.17.0, zero model tokens)
+- Weekly health report: `python3 scripts/weekly_report.py` writes `health-<week>_<date>.md` and `.json` to `<ops root>/projects/orchestration/digests/weekly/` (read-only on the Exchange: role numbers come from a temp copy). A rerun on the same day replaces that day's file.
+- Corrections harvester: `python3 scripts/corrections_harvester.py --dry-run` (counts only), then without `--dry-run` to write candidate case files to `<ops root>/projects/skill-curation/eval-candidates/<date>/`. Reads only the indexer vault. Run by the curator or the operator: the files hold operator chat text (redacted).
+- C-live: `python3 tests/c_live.py --ab <published tree>/scripts <build tree>/scripts --out <file>` before each stage ACCEPT (lint needs HARNESS_HOME set; the test suite runs with it unset).
+
+## Confinement (0.17.0, R-053)
+- Path ceiling for config.json `workspaces`, `allowed_roots`, `project_roots`: ~/Claude/Projects, ~/.claude/crew-coordinator, ~/.claude/plugins. Anything else goes in `~/.config/crew-coordinator/operator.json` (mode 0600).
+- `watch` and `plugin_dirs` are read from operator.json only.
+- An MCP publish override is confined to the home, workspaces and allowed roots; the CLI publish is not.
+- Warnings name the file and key (`config.json workspaces[0] ignored: outside the ceiling`), never the path.
+
+## Vault, handoff gate, lessons and the digest ceiling (0.17.0, stage 2)
+
+- Vault: `Exchange/vault/<project>/<role>/<date>-<agent>.md`, distilled from the indexer output only (never raw jsonl), redacted on input and output, written at handoff (config `vault: on`, ships off) and as an untagged checkpoint at PreCompact and `/save`. Operator purge: `transcript_indexer.py purge --session ID --vault --yes` (tombstone + `.purged.jsonl`). Recall: `harness_recall kind=vault`.
+- Handoff gate: config `handoff_gate: warn|block` (ships warn); events `handoff.gate_warn|gate_blocked|gate_override`. Override: `harness_handoff gate_override="<reason>"`.
+- Lessons: `kind=note` + tag `lesson` + `What happened: / Cause: / Rule:` lines + `role:<role>|role:all`; digests show curator or operator lessons only. `harness.py lessons-view` generates docs/lessons.md. Digest section: newest 3, 90 tokens in all; `role:all` = agent roles (the operator's seat shows `role:operator` only). `restore_pin_cap` is 15: 20 breached rule A for four roles once lessons were imported into a simulated copy (10-25); raise it only by operator config.
+- Digest ceiling (P-2.9, rule A, envoy m-1797922f9c76): C-live `--ab` measures one snapshot with the old and the new tree and fails the stage (exit 2) when a role's restore digest above the inline capsule grows past old x `digest_growth_max` (1.2), exceeds `digest_caps` (envoy and curator 1794), exceeds `restore_budget` (2000), or is cut at the budget. `digest_ceiling_tokens` (int, or role -> int with `*`) is the operator's absolute override in place of the growth rule (D-2b929).
+- Tried and dropped: a fixed per-role table (one day's baseline + 20%). On 10-25 it failed roles whose code did not change their digest: the dreamer (0 pins) grew 793 -> 964 tokens from mail traffic alone between 10-24 and 10-25. An absolute baseline mixes traffic with code growth; do not reintroduce it as a default.
+
+## Release checklist (0.17.0, stage 3)
+
+- Final ACCEPT: second reviewer from another model family (ee P-107); canary install to one role first (R-044).
