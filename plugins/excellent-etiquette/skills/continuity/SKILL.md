@@ -17,3 +17,5 @@ description: "Use when: handoffs, new chats, compaction, corpus memory, steward/
 - [project:cv-management] P-53 On "remember this": save to project memory the same turn, then add to the rules file.
 - [role:corpus-steward] P-54 Archive, never delete; claim leases before shared edits; reply via harness_send, not new files; derive indexes from ledger.
 - [global] P-101 Local project folders are lowercase-with-dashes (D-8dae9); after the 2026-10-14 cutover project files live under ~/Claude/Code/harness-ops/projects/<project>/ (alias map: harness-ops/_alias/alias-map.json).
+- [global] P-104 'Flag it' (operator vocabulary): record the defect or improvement in the corpus and the register, tag it for the next build, notify the owner roles (curator: plugins and skills; secretary: operator queue); do not only change your own behavior (D-19ea6).
+- [global] P-105 Lessons, unconditional: on finding an error in yourself or how you acted, add what happened, cause and rule to projects/harness-ops/docs/lessons.md, record it with tag lesson, send it to role:curator (D-19ea6).

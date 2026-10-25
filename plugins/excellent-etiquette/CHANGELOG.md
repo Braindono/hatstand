@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.9 (2026-10-24)
+Scope (operator-approved, D-fffe6, record A-d8b95): R-064 operator preferences in skill text; R-067 flag-it definition in skill text; R-066 lessons rule in skill text; R-044 second reviewer rule for the final ACCEPT; R-057 release cadence rule text
+- R-064 operator preferences in skill text: communication P-99 amended (dry run alone first, one command per id for prompting commands, paste with a leading !; replaces "join several with &&"), P-102 skepticism and gauge not guesses, P-103 a named tool describes the goal and a better way is always offered (D-24743, D-1aeb7, D-40d27, L-010, L-011).
+- R-067 flag-it definition in skill text: continuity P-104 (record in corpus and register, tag for the next build, notify owner roles).
+- R-066 lessons rule in skill text: continuity P-105 (add to docs/lessons.md, record with tag lesson, send to role:curator); plugins P-106 (curator folds lessons into skill text each release; L-005, L-006, L-007, L-008 rules).
+- R-044 second reviewer rule for the final ACCEPT: plugins P-107 (second reviewer from another model family; canary to one role first when practical).
+- R-057 release cadence rule text: plugins P-108 (one release per plugin per cycle chosen by the operator; hotfix only with his approval).
+- communication body held at <=600 tokens: P-97 and P-98 detail moved verbatim to skills/communication/references/more.md, trigger summaries kept in the body.
+
 ## 0.2.8 (2026-10-23)
 Scope (operator-approved, W43 E1): Autonomy P-80 and P-81 release-scope rule
 - Autonomy P-80 and P-81 release-scope rule: release scope (items, version numbers, splitting, deferring, bundling) is the operator's decision; propose it with context and rationale, then wait; builders and the curator never cut, split or renumber a release on their own (D-5221b, D-dc75c).
