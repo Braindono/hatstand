@@ -99,6 +99,19 @@ class Hatstand(unittest.TestCase):
         os.makedirs(fx)
         with open(os.path.join(fx, "events.jsonl"), "w") as f:
             f.write("{}\n")
+        # 0.18.0 (R-097): the fixture exemption is narrow, only files whose sha the fixture manifest lists
+        r = self.h.hatstand_sync(self.envoy)
+        self.assertEqual((r["state"], r["exit"]), ("refused", 1), r)               # not in a manifest: refused
+        # critic B2: a manifest written for the occasion is refused too; only the real fixture, whose manifest has the
+        # sha pinned in hatstand_guard.py, is allowed
+        import json
+        with open(os.path.join(os.path.dirname(os.path.dirname(fx)), "manifest.json"), "w") as f:
+            json.dump({"files": {"_harness/events.jsonl": "0" * 64}}, f)
+        r = self.h.hatstand_sync(self.envoy)
+        self.assertEqual((r["state"], r["exit"]), ("refused", 1), r)
+        real = os.path.join(HERE, "fixtures", "steward-r045")
+        shutil.rmtree(os.path.dirname(os.path.dirname(fx)))
+        shutil.copytree(real, os.path.dirname(os.path.dirname(fx)))
         self.assertEqual(self.h.hatstand_sync(self.envoy)["state"], "dry-run")      # the synthetic fixture is allowed
         with open(os.path.join(base, "demo", "events.jsonl"), "w") as f:
             f.write("{}\n")

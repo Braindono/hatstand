@@ -42,7 +42,7 @@ Python 3.8+ standard library only. No installs.
 ## Setup
 
 1. Install the plugin.
-2. Shared folder: **`~/Claude/Projects/Exchange`** (or `~/mnt/Exchange` inside Cowork), unless `$HARNESS_HOME` is set. There is no fallback: if Exchange is missing, the tools return a clear error instead of starting a second ledger.
+2. Shared folder: **`~/Claude/Exchange`** (since 0.18.0; the old `~/Claude/Projects/Exchange` is still found for one release, and `~/mnt/Exchange` inside Cowork), unless `$HARNESS_HOME` is set. There is no fallback to any other folder: if Exchange is missing, the tools return a clear error instead of starting a second ledger.
    ```
    Exchange/
    ├── OPERATOR.md            standing instructions from you to every agent (surfaced by /update)

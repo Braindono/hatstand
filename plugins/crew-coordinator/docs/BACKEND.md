@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Current backend | `filesystem-jsonl`: one hash-chained `~/Claude/Projects/Exchange/_harness/events.jsonl` guarded by an advisory `flock` |
+| Current backend | `filesystem-jsonl`: one hash-chained `~/Claude/Exchange/_harness/events.jsonl` (before 0.18.0: `~/Claude/Projects/Exchange`) guarded by an advisory `flock` |
 | Status | **INTERIM.** Approved as the easiest path to a working system. Not the long-term design. |
 | Flag locations | `BACKEND_STATUS` in `scripts/harness.py`, the MCP server `instructions`, every ledger result, and the dashboard header badge |
 
@@ -108,4 +108,5 @@ Config (`Exchange/_harness/config.json`): `ctx_role_windows` edits the 1M list (
 
 ## Release checklist (0.17.0, stage 3)
 
+- Hatstand sync (standing rule D-c92cb, 0.18.0 R-097): the corpus and the ledger are never published to Hatstand. Before every push, hatstand-sync.sh runs the secret scan and hatstand_guard.py (paths, ledger-shape lines, live corpus titles); a hit stops the push. Never weaken or bypass either check; a new fixture exemption needs the envoy's review and a CHANGELOG line.
 - Final ACCEPT: second reviewer from another model family (ee P-107); canary install to one role first (R-044).

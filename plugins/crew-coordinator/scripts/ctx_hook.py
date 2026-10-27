@@ -91,8 +91,17 @@ def write_state(path, text):
         raise
 
 
+def default_home():
+    """0.18.0 (R-082): the first existing of ~/Claude/Exchange and the old ~/Claude/Projects/Exchange (new path first)."""
+    for c in ("~/Claude/Exchange", "~/Claude/Projects/Exchange"):
+        p = os.path.expanduser(c)
+        if os.path.isdir(p):
+            return p
+    return os.path.expanduser("~/Claude/Exchange")
+
+
 def home_cfg():
-    home = os.environ.get("HARNESS_HOME") or os.path.expanduser("~/Claude/Projects/Exchange")
+    home = os.environ.get("HARNESS_HOME") or default_home()
     try:
         return json.load(open(os.path.join(home, "_harness", "config.json")))
     except Exception:

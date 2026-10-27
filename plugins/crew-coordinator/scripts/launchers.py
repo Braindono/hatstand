@@ -7,7 +7,8 @@ overwritten. A README.md index lists every launcher and its target.
 
 Targets come from the defaults below or from the operator's private ~/.config/crew-coordinator/operator.json key
 `operator_launchers` ({name: path}), NEVER from the shared config.json: any agent can edit that file, and a launcher is
-code the operator runs. Every target must resolve under ~/Claude/Projects or ~/Claude/Code. Missing targets are skipped
+code the operator runs. Every target must resolve under ~/Claude/Projects, ~/Claude/Code or the harness home
+(0.18.0, R-082: the home moves to ~/Claude/Exchange, outside ~/Claude/Projects). Missing targets are skipped
 and reported. Dry run by default; `--apply` writes.
 """
 import os
@@ -45,6 +46,9 @@ def targets(home, operator_cfg=None):
         for k, v in extra.items():
             if isinstance(k, str) and isinstance(v, str) and k.replace("-", "").isalnum():
                 spec[k] = (v, "operator.json entry")
+    # the harness home counts as a root only when it is a real home (it holds the ledger); a stray folder passed as
+    # home never widens what a launcher may point at (envoy m-1953412e1e3f)
+    home_root = (home,) if home and os.path.isfile(os.path.join(home, "_harness", "events.jsonl")) else ()
     out = []
     for name, (raw, purpose) in sorted(spec.items()):
         t = raw
@@ -55,8 +59,8 @@ def targets(home, operator_cfg=None):
         ext = os.path.splitext(t)[1]
         if ext not in INTERP:
             row.update(ok=False, why="unsupported file type %r" % ext)
-        elif not any(_under(t, r) for r in ROOTS):
-            row.update(ok=False, why="outside ~/Claude/Projects and ~/Claude/Code")
+        elif not any(_under(t, r) for r in ROOTS + home_root):
+            row.update(ok=False, why="outside ~/Claude/Projects, ~/Claude/Code and the harness home")
         elif not os.path.isfile(t):
             row.update(ok=False, why="target missing")
         out.append(row)

@@ -35,7 +35,7 @@ $H serve [--port 7717]       # live dashboard; /operator = chats needing action
 $H dashboard [--out file]    # static snapshot
 ```
 
-Shared folder: `$HARNESS_HOME`. If that is unset, the CLI uses the first existing of `~/Claude/Projects/Exchange` and `~/mnt/Exchange` It never falls back to another folder; if neither exists, it returns an error. Project folders whose files agents claim go under `"workspaces"` in `Exchange/_harness/config.json`, or in `$HARNESS_WORKSPACES`, separated by colons.
+Shared folder: `$HARNESS_HOME`. If that is unset, the CLI uses the first existing of `~/Claude/Exchange`, `~/Claude/Projects/Exchange` (the old path, one release) and `~/mnt/Exchange`. It never falls back to another folder; if neither exists, it returns an error. Project folders whose files agents claim go under `"workspaces"` in `Exchange/_harness/config.json`, or in `$HARNESS_WORKSPACES`, separated by colons.
 
 Output is compact text. Set `HARNESS_JSON=1` for JSON.
 

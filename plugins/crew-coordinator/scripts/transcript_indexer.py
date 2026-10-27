@@ -116,7 +116,12 @@ def source_dir():
 
 
 def exchange_log():
-    return os.environ.get("INDEXER_LEDGER") or os.path.join(home(), "Claude", "Projects", "Exchange", "_harness", "events.jsonl")
+    """0.18.0 (R-082): the first existing ledger of ~/Claude/Exchange, then the old ~/Claude/Projects/Exchange."""
+    if os.environ.get("INDEXER_LEDGER"):
+        return os.environ["INDEXER_LEDGER"]
+    cands = [os.path.join(home(), "Claude", "Exchange", "_harness", "events.jsonl"),
+             os.path.join(home(), "Claude", "Projects", "Exchange", "_harness", "events.jsonl")]
+    return next((c for c in cands if os.path.isfile(c)), cands[0])
 
 
 # ---------------------------------------------------------------- redaction (fail closed)
@@ -132,9 +137,14 @@ SPANS = [
     ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=\-]{20,}")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
     ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)")),
-    ("url-credentials", re.compile(r"\b[a-z][a-z0-9+.\-]*://[^\s/:@]+:[^\s/@]+@")),
-    ("secret-assignment", re.compile(r"(?i)\b(?:pass(?:word|wd)?|secret|token|api[_\-]?key|access[_\-]?key|auth)\b\s*[:=]\s*[\"']?[^\s\"']{8,}")),
-    ("long-hex-or-b64-value", re.compile(r"(?i)\b[a-z_\-]*(?:key|secret|token)[a-z_\-]*\s*[:=]\s*[\"']?[A-Za-z0-9+/=_\-]{32,}")),
+    # 0.18.0: scheme bounded to {0,31} for the same reason as below (unbounded, 100,000 x 'a-' took 8.9 s; since 0.17.0)
+    ("url-credentials", re.compile(r"\b[a-z][a-z0-9+.\-]{0,31}://[^\s/:@]+:[^\s/@]+@")),
+    # 0.18.0 (R-096, G-01): an optional closing quote after the key name, so JSON keys ("password": "...") redact too;
+    # a camelCase or snake prefix (clientSecret, client_secret) is part of the key name. The name classes are bounded
+    # to {0,40} (envoy m-003c67eeb528): unbounded, a long hyphen run backtracked quadratically (8,000 x 'a-': 6.8 s).
+    # An escaped quote (\\" inside a JSON string) may sit on either side of the colon (critic N-b5617, N3).
+    ("secret-assignment", re.compile(r"(?i)\b[a-z_\-]{0,40}(?:pass(?:word|wd)?|secret|token|api[_\-]?key|access[_\-]?key|auth)\b\\?[\"']?\s*[:=]\s*\\?[\"']?[^\s\"']{8,}")),
+    ("long-hex-or-b64-value", re.compile(r"(?i)\b[a-z_\-]{0,40}(?:key|secret|token)[a-z_\-]{0,40}\\?[\"']?\s*[:=]\s*\\?[\"']?[A-Za-z0-9+/=_\-]{32,}")),
 ]
 CARD_RE = re.compile(r"\b(?:\d[ \-]?){13,16}\b")
 SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
