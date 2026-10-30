@@ -25,6 +25,13 @@ def mk_plugin(tmp, name="dummy", ver="1.0.0"):
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        # 0.19.0 M8 (envoy m-ae02da9fdc78): register() records plugin_inventory(), which scans the folders next to this
+        # plugin. Run from a package unpacked in the system temp folder, those are leftover test plugins ("dummy" 1.0.0
+        # with other code), so an up-to-date install read as "reload". The test agents see no installed plugins.
+        real = H.plugin_inventory
+        H.plugin_inventory = lambda home, own_code=None: {}
+        self.addCleanup(setattr, H, "plugin_inventory", real)
         self.home = os.path.join(self.tmp, "home"); os.makedirs(self.home)
         self.h = H.Harness(self.home)
         self.h.role_define("operator", "corpus-envoy", "orch")

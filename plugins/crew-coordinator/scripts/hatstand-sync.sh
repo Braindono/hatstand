@@ -31,13 +31,37 @@ trap 'rm -rf "$T"' EXIT
 W="$T/hatstand"
 GH='!gh auth git-credential'
 
+# 0.19.0 (R-116): after a push, an annotated tag <plugin>-v<version> for every plugin version in the repo that has none yet
+# (the clone fetched the existing tags). No branches; only the new tag refs are pushed, never --tags. Names are validated.
+tag_new() {
+  for d in plugins/*/; do
+    pl="$(basename "$d")"
+    # M6 (critic N-9d725): the version is the top-level "version" key of plugin.json, read as JSON (a greedy grep could pick a nested one)
+    v="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get("version",""); print(v if isinstance(v,str) else "")' "plugins/$pl/.claude-plugin/plugin.json" 2>/dev/null)" || v=""
+    case "$pl" in ""|*[!a-z0-9-]*) continue ;; esac
+    case "$v" in ""|*[!0-9A-Za-z._-]*) continue ;; esac
+    tag="$pl-v$v"
+    git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1 && continue
+    if git -c user.name=Braindono -c user.email=Braindono@users.noreply.github.com tag -a "$tag" -m "$pl $v" \
+       && git -c credential.helper= -c credential.helper="$GH" push -q origin "refs/tags/$tag:refs/tags/$tag"; then
+      echo "hatstand: tagged $tag"
+    else
+      echo "hatstand: tag $tag failed (the files are already pushed)" >&2
+    fi
+  done
+}
+
 git -c credential.helper= -c credential.helper="$GH" clone -q "$REPO_URL" "$W"
 cd "$W"
 rsync -rc --delete --exclude .DS_Store --exclude __pycache__ "$M/marketplace/plugins/" plugins/
 cp "$M/wake.py" bin/wake.py && chmod +x bin/wake.py
 cp "$M/marketplace/.claude-plugin/marketplace.json" .claude-plugin/marketplace.json
 git add -A
-if git diff --cached --quiet; then echo "hatstand: no changes, nothing to push"; exit 0; fi
+if git diff --cached --quiet; then
+  echo "hatstand: no changes, nothing to push"
+  [ "$PUSH" = 1 ] && tag_new
+  exit 0
+fi
 
 # fail closed: refuse to push anything that looks like a secret or personal address.
 # Known detector code and synthetic test fixtures are exempt BY FILE (they define the secret patterns and use fake
@@ -76,6 +100,7 @@ if [ "$PUSH" = 1 ]; then
 Published build(s) mirrored from the harness marketplace."
   git -c credential.helper= -c credential.helper="$GH" push -q origin main
   echo "hatstand: pushed $(git rev-parse --short HEAD)"
+  tag_new
 else
   echo "hatstand: dry run, nothing pushed (use --push)"
 fi

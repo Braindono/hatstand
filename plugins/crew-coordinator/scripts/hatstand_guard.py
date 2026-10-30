@@ -18,6 +18,16 @@ Checks, on every staged file except the one exemption below:
    carry that shape are SHAPE_PINNED below, each by path AND sha256: a changed pinned file stops the push until its
    pin is updated in a reviewed release (curator m-cb0764d65780).
 3. Content, when HARNESS_HOME is set: a verbatim live corpus title of 40 or more characters.
+4. 0.21.0 (A-5a989 item 9, D-6385f), three more rules, all fail-closed:
+   a. Structural, in every JSON, YAML, fixture and CHANGELOG file (parsed keys and values, never code or prose): a "mapping" or
+      "omitted_legacy_tags" key, or any role-state:<name> value, is refused.
+   b. Private terms: a whole-word, case-insensitive match, in ANY text file (prose and code included), against the local list
+      <home>/_harness/data/hatstand-private-terms.txt (one term per line, # comments; kept by the curator, never packaged).
+      A hyphenated or multi-word term also matches its spaced, underscored and joined spellings. Limit, by design: a job-search target that
+      is a common word (a search engine, a given name) cannot be guarded by a whole-word match and is not on the list.
+      The refusal names the file and the term's line number in the list, never the term.
+   c. Fail closed: HARNESS_HOME unset, the corpus ledger unreadable, or the terms file missing, unreadable or empty is a STOP
+      with nothing pushed. There is no environment override.
 Exemption (narrow, listed in the CHANGELOG): the synthetic steward fixture tests/fixtures/steward-r045 of
 crew-coordinator. Its manifest.json must have exactly the sha256 pinned below (a manifest staged with new entries
 cannot certify itself, critic B2), and only files whose sha256 that manifest lists are exempt. The manifest itself is
@@ -36,7 +46,7 @@ _CC = "plugins/crew-coordinator/"
 # one state-cache test. Path plus sha256; anything else with the shape stops the push.
 SHAPE_PINNED = {
     _CC + "data/hash-vectors.json": "26b000602ec96ab36a4c005e00d269936ddbe3e15aeee213c7e75341cd64c3fb",
-    _CC + "docs/EVENTS.md": "b76d28de5b64eda69d21e3a4134fc43611787b087a3a36649f4a4931b00c1311",
+    _CC + "docs/EVENTS.md": "e8bbea4d000f1dbaf71aba6e6f75ca16ca6da3812afe82bae2cb1336d328c94a",
     _CC + "scripts/hash_vectors.py": "b4349bca19d6e83a934345cbb9f62de9bfab32bb3149adc5ac470a4e59f3b416",
     _CC + "tests/test_cc161_state_cache.py": "889d98a22dd8c21bdb082e571ea708a973d252ca9691db027204cc9fa50eef45",
 }
@@ -51,6 +61,11 @@ ASSET_MAGIC = {".png": (b"\x89PNG\r\n\x1a\n",), ".jpg": (b"\xff\xd8\xff",), ".jp
                ".pdf": (b"%PDF-",)}
 ASSET_EXT = set(ASSET_MAGIC)
 TITLE_MIN = 40
+TERMS_FILE = "hatstand-private-terms.txt"
+STRUCT_KEYS = ("mapping", "omitted_legacy_tags")
+ROLE_STATE = re.compile(r"role-state:[A-Za-z0-9_]")
+STRUCT_KEY_TEXT = re.compile(r"""\\?["']?(?:%s)\\?["']?\s*:""" % "|".join(STRUCT_KEYS))
+DATA_EXT = {".json", ".yml", ".yaml"}
 WINDOW = 600
 GZ_MAX = 50 * 1024 * 1024
 
@@ -164,11 +179,100 @@ def live_titles(home):
     return out
 
 
+def is_data(name):
+    """JSON, YAML, fixture files and the CHANGELOG: the files whose parsed keys and values the structural rule reads."""
+    low = name.lower()
+    base = low.rsplit("/", 1)[-1]
+    return os.path.splitext(low)[1] in DATA_EXT or "/fixtures/" in "/" + low or base.startswith("changelog")
+
+
+def structural_hit(name, text):
+    """-> reason or None. JSON is parsed (keys at any depth, string values); other data files are read as text."""
+    if os.path.splitext(name.lower())[1] == ".json":
+        try:
+            found = []
+
+            def walk(o):
+                if isinstance(o, dict):
+                    for k, v in o.items():
+                        if k in STRUCT_KEYS:
+                            found.append("a '%s' key" % k)
+                        if isinstance(k, str) and ROLE_STATE.search(k):
+                            found.append("a role-state:* key")
+                        walk(v)
+                elif isinstance(o, list):
+                    for v in o:
+                        walk(v)
+                elif isinstance(o, str) and ROLE_STATE.search(o):
+                    found.append("a role-state:* value")
+            walk(json.loads(text))
+            if found:
+                return "carries " + found[0] + " (never pushed: structural rule)"
+            return None
+        except ValueError:
+            pass                                    # not valid JSON: read it as text below
+    m = STRUCT_KEY_TEXT.search(text)
+    if m:
+        return "carries a '%s' key (never pushed: structural rule)" % m.group(0).strip("\\\"': ")
+    if ROLE_STATE.search(text):
+        return "carries a role-state:* value (never pushed: structural rule)"
+    return None
+
+
+def read_terms(home):
+    """-> (compiled regex, count, problem). The terms file is the curator's local list; never packaged."""
+    p = os.path.join(home, "_harness", "data", TERMS_FILE)
+    try:
+        with open(p, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None, 0, "the private-terms list (%s) cannot be read" % TERMS_FILE
+    terms = [(n, t.strip()) for n, t in enumerate(lines, 1) if t.strip() and not t.lstrip().startswith("#")]
+    if not terms:
+        return None, 0, "the private-terms list (%s) is empty" % TERMS_FILE
+    # A multi-word or hyphenated term also matches its spaced, underscored and joined spellings (critic, thread t-682b61f20f):
+    # a term such as "two-words" also catches "Two Words", "two_words" and "twowords".
+    rx = "|".join("(?P<t%d>%s)" % (n, r"[\s\-_]*".join(re.escape(w) for w in re.split(r"[\s\-_]+", t) if w)) for n, t in terms)
+    return re.compile(r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % rx, re.I), len(terms), None
+
+
+def read_corpus(home):
+    """-> (titles of 40+ chars, live tag set, problem). The tag list is only a read check: if the ledger cannot be read, nothing is pushed."""
+    out, tags = set(), set()
+    log = os.path.join(home, "_harness", "events.jsonl")
+    try:
+        with open(log, encoding="utf-8") as f:
+            for line in f:
+                if '"corpus.recorded"' not in line:
+                    continue
+                try:
+                    d = json.loads(line).get("data") or {}
+                except ValueError:
+                    continue
+                t = d.get("title")
+                if isinstance(t, str) and len(t.strip()) >= TITLE_MIN:
+                    out.add(t.strip())
+                for x in d.get("tags") or []:
+                    if isinstance(x, str):
+                        tags.add(x)
+    except (OSError, UnicodeDecodeError):
+        return set(), set(), "the corpus ledger cannot be read"
+    return out, tags, None
+
+
 def check(root, names, home=None):
     """-> list of (path, reason)."""
     man, problem = _manifest(root)
-    titles = live_titles(home) if home else set()
     hits = []
+    titles, terms_rx, fatal = set(), None, None
+    if not home:
+        fatal = "HARNESS_HOME is not set, so the corpus and the private terms cannot be read (fail closed, no override)"
+    else:
+        titles, _tags, fatal = read_corpus(home)
+        if not fatal:
+            terms_rx, _n, fatal = read_terms(home)
+    if fatal:
+        return [("(guard)", fatal + "; nothing pushed")]
     if problem and any(n.startswith(FIXTURE) for n in names):
         hits.append((FIXTURE + "manifest.json", problem))
     for name in names:
@@ -200,6 +304,16 @@ def check(root, names, home=None):
                 why += "; it is a pinned file whose sha256 changed (update SHAPE_PINNED in a reviewed release)"
         if why:
             hits.append((name, why))
+            continue
+        if is_data(name):
+            why = structural_hit(name, text)
+            if why:
+                hits.append((name, why))
+                continue
+        m = terms_rx.search(text)
+        if m:
+            n = int(m.lastgroup[1:])
+            hits.append((name, "contains a private term (line %d of the local %s)" % (n, TERMS_FILE)))
             continue
         for t in titles:
             if t in text:

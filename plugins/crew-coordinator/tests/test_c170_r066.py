@@ -54,45 +54,54 @@ class Lessons(unittest.TestCase):
         self.assertEqual(H.lesson_fields("Rule:"), {})
 
     def test_template_warns_but_never_rejects(self):
-        r = self.lesson("ops-coder", "free text", "", body="I did a thing wrong")
+        r = self.lesson("ops-coder", "free text", "", body="What happened: only this one line")
         self.assertIn("id", r)
-        self.assertIn("lacks 'What happened:', 'Cause:', 'Rule:'", r["warn"])
+        self.assertIn("lacks 'Cause:', 'Rule:'", r["warn"])
+        with self.assertRaises(H.HarnessError):   # 0.19.0 (D-4de9e): a line that is not a field line is refused
+            self.lesson("ops-coder", "free text", "", body="I did a thing wrong")
         self.assertNotIn("warn", self.lesson("ops-coder", "ok", "a rule"))
 
-    def test_only_curator_or_operator_lessons_reach_a_digest(self):
-        self.lesson("ops-coder", "agent lesson", "agent rule")
-        self.assertIsNone(self.section("ops-coder"))
-        self.lesson("curator", "curator lesson", "curator rule")
+    def cur(self, *ids):
+        """0.19.0 (R-122): a lesson reaches a digest only after the operator's grant of the curator's proposal."""
+        r = self.h.lesson_curate_propose(self.ids["curator"], list(ids))
+        return self.h.approve(r["pending"], "cli-tty", self.h._approval_records()[r["pending"]]["args_digest"][:4], True)
+
+    def test_only_curated_lessons_reach_a_digest_whoever_wrote_them(self):
+        a = self.lesson("ops-coder", "agent lesson", "agent rule")
+        self.assertNotIn("agent rule", self.section("ops-coder") or "")
+        self.assertIn("1 uncurated lesson waits", self.section("ops-coder"))
+        self.cur(a["id"])
         sec = self.section("ops-coder")
-        self.assertIn("rule: curator rule", sec)
-        self.assertNotIn("agent rule", sec)
-        self.assertIn("⟦untrusted from peers", sec)
+        self.assertIn("rule: agent rule", sec)
+        self.assertIn("⟦lesson approved by the operator, proposed by curator", sec)
+        self.assertNotIn("⟦untrusted from peers", sec)
 
     def test_operator_seat_gets_only_role_operator_lessons(self):
         self.h.role_define("operator", "operator", "harness-ops")
         op = self.h.register(project="harness-ops", model=MODEL)["id"]
         self.h.role_assign("operator", "operator", op)
         self.ids["operator"] = op
-        self.lesson("curator", "agent conduct", "agents only")
-        self.assertIsNone(self.section("operator"))                 # role:all = agent roles
-        self.lesson("curator", "for the seat", "operator rule", roles=("operator",))
+        a = self.lesson("curator", "agent conduct", "agents only")
+        b = self.lesson("curator", "for the seat", "operator rule", roles=("operator",))
+        self.cur(a["id"], b["id"])
         sec = self.section("operator")
         self.assertIn("operator rule", sec)
         self.assertNotIn("agents only", sec)
-        self.assertLessEqual(est_tokens("▸ Lessons" + sec), 90)
+        self.assertLessEqual(est_tokens("▸ Lessons" + sec), 110)
 
     def test_role_tags_select(self):
-        self.lesson("curator", "for envoy", "envoy only", roles=("envoy",))
-        self.assertIsNone(self.section("ops-coder"))
+        a = self.lesson("curator", "for envoy", "envoy only", roles=("envoy",))
+        self.cur(a["id"])
+        self.assertNotIn("envoy only", self.section("ops-coder") or "")
         self.assertIn("envoy only", self.section("envoy"))
 
     def test_newest_n_and_whole_section_within_cap(self):
-        for k in range(8):
-            self.lesson("curator", "case %d" % k, ("rule %d " % k) + "long words " * 20)
+        ids = [self.lesson("curator", "case %d" % k, ("rule %d " % k) + "long words " * 10)["id"] for k in range(8)]
+        self.cur(*ids[-3:])
         sec = self.section("ops-coder")
-        self.assertLessEqual(est_tokens("▸ Lessons" + sec), 90)    # heading, fence and more-line inside the cap
+        self.assertLessEqual(est_tokens("▸ Lessons" + sec), 110)    # heading, fence, more-line and count line inside the cap
         self.assertIn("rule 7", sec)
-        self.assertNotIn("rule 4", sec)                             # newest 3 at most
+        self.assertNotIn("rule 5", sec)                             # newest 2 at most
         self.assertNotIn("[digest cut", self.h.restore_digest(self.h.state(), self.ids["ops-coder"], "ops-coder", []))
         with open(os.path.join(self.home, "_harness", "config.json"), "w") as f:
             json.dump({"restore_lessons": 0}, f)
@@ -100,17 +109,21 @@ class Lessons(unittest.TestCase):
 
     def test_superseded_or_incomplete_lessons_hidden(self):
         old = self.lesson("curator", "old", "old rule")
-        self.h.record(self.ids["curator"], "note", "Lesson: new", BODY.format(w="new", r="new rule"), ["lesson", "role:all"],
-                      supersedes=old["id"])
-        self.h.record(self.ids["curator"], "note", "Lesson: half", "What happened: x\nRule: y", ["lesson", "role:all"])
+        new = self.h.record(self.ids["curator"], "note", "Lesson: new", BODY.format(w="new", r="new rule"), ["lesson", "role:all"],
+                            supersedes=old["id"])
+        half = self.h.record(self.ids["curator"], "note", "Lesson: half", "What happened: x\nRule: y", ["lesson", "role:all"])
+        self.cur(new["id"])
+        with self.assertRaises(H.HarnessError):
+            self.cur(half["id"])                                    # incomplete: not a live, complete lesson
         sec = self.section("ops-coder")
         self.assertIn("new rule", sec)
         self.assertNotIn("old rule", sec)
         self.assertNotIn("half", sec)
 
-    def test_view_is_generated_from_curator_records(self):
-        self.lesson("curator", "a | piped", "rule A")
+    def test_view_is_generated_from_curated_records(self):
+        a = self.lesson("curator", "a | piped", "rule A")
         self.lesson("ops-coder", "hidden", "rule B")
+        self.cur(a["id"])
         v = self.h.lessons_view()
         self.assertTrue(v.startswith("# Harness lessons (GENERATED"))
         self.assertIn("| a / piped | a cause | rule A |", v)
@@ -133,8 +146,9 @@ class Lessons(unittest.TestCase):
         r = self.h.lessons_import(self.ids["curator"], p, dry_run=False)
         self.assertEqual(len(r["recorded"]), 2)
         self.assertEqual(self.h.lessons_import(self.ids["curator"], p, dry_run=False), {"recorded": [], "skipped": ["L-001", "L-002"]})
-        sec = self.section("ops-coder")
-        self.assertIn("Compare live-ledger counts", sec)
+        self.assertNotIn("Compare live-ledger counts", self.section("ops-coder"))      # imported, not yet curated by the operator
+        self.cur(*r["recorded"])
+        self.assertIn("Compare live-ledger counts", self.section("ops-coder"))
         self.assertIn("L-002 (ops-coder, 2026-10-23)", self.h.corpus.get([r["recorded"][1]])[0])
 
 

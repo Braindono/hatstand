@@ -297,9 +297,9 @@ class Small(Base):
         self.adm("set_project", a, target=a, project="orch-two")
         for who in (b, a):
             t = self.h.sync(who)["text"]
-            self.assertIn("▲ 1 approval request(s): harness.py pending", t)
-            self.assertNotIn("orch-two", t)
-        self.assertIn("approval request", self.h.sync(b, do_only=True)["text"])
+            self.assertRegex(t, r"▲ approval A-[0-9a-f]{5} from \S+ \S+: set_project, \d+ min left \(harness.py approve A-")   # 0.19.0 (R-120)
+            self.assertNotIn("orch-two", t)                                                                                    # still no args
+        self.assertIn("▲ approval A-", self.h.sync(b, do_only=True)["text"])
 
     def test_no_do_line_without_pending(self):
         self.assertNotIn("approval request", self.h.sync(self.agent())["text"])

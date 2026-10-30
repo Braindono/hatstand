@@ -22,16 +22,17 @@ import time
 from datetime import datetime
 
 # 0.17.0 (R-059, D-2b929): the model never sets a context threshold. Window = the role's window (DEFAULT_ROLE_WINDOWS
-# or config ctx_role_windows), else DEFAULT_WINDOW (config ctx_window), on every surface; plan/handoff 60%/80%.
+# or config ctx_role_windows), else DEFAULT_WINDOW (config ctx_window), on every surface; plan/handoff 70%/85% (0.19.0, R-106; was 60/80).
 # Haiku is always an ephemeral subagent: "silent" = no plan or handoff point, the hook prints no ctx text.
 SURFACES = ("code", "chat", "cowork")      # still reported (surface_src), no longer used for windows
 SILENT_MODELS = ("claude-haiku",)          # prefix match
 DEFAULT_WINDOW = 500000                    # the one Cowork window for every role outside the 1M list
+PLAN_SHARE, HANDOFF_SHARE = 0.70, 0.85          # the one source of the default shares (harness.ctx_band calls limits())
 HAIKU_WINDOW = 200000                      # informational only (Haiku is silent)
 LEGACY_CTX_KEYS = ("ctx_table", "ctx_window_by_model")   # ignored since 0.17.0
 # 0.16.3: roles that run with a 1M window on any surface and model (operator 10-23). fnmatch on the CURRENT role name;
 # config ctx_role_windows replaces this map (an empty map switches the feature off).
-DEFAULT_ROLE_WINDOWS = {"*-coder": 1000000, "envoy": 1000000, "curator": 1000000}
+DEFAULT_ROLE_WINDOWS = {"*-coder": 1000000, "envoy": 1000000, "curator": 1000000, "harness-critic": 1000000}   # 0.19.0 (D-046db)
 CURRENT_ROLE = None      # set per hook call from the session state file (role parsed from the harness banner)
 COLD_S = 3600
 STEWARD = ("[scheduled] corpus-steward pass", "[scheduled] steward pass")   # 0.16.0: both prompts (the schedule is renamed later)
@@ -233,7 +234,7 @@ def limits(model=None, path=None, c=None, role=None):
     0.17.0 (R-059, D-2b929): window by role only. A role matching ctx_role_windows (default *-coder, envoy, curator:
     1M) gets that window; every other role, or no role yet, gets config ctx_window (default 500k). Model and surface
     do not change it (the per-model CTX_TABLE, ctx_table and ctx_window_by_model are gone; those keys are ignored).
-    Haiku stays silent. Shares: config ctx_plan / ctx_handoff (default 0.60 / 0.80); ctx_plan_tokens /
+    Haiku stays silent. Shares: config ctx_plan / ctx_handoff (default 0.70 / 0.85 since 0.19.0); ctx_plan_tokens /
     ctx_handoff_tokens > 0 override the thresholds."""
     c = home_cfg() if c is None else c
     surf = surface(path)
@@ -245,7 +246,7 @@ def limits(model=None, path=None, c=None, role=None):
     except (TypeError, ValueError):
         default_w = DEFAULT_WINDOW
     w = HAIKU_WINDOW if silent else (rw or default_w)
-    plan, hand = float(c.get("ctx_plan", 0.6)), float(c.get("ctx_handoff", 0.8))
+    plan, hand = float(c.get("ctx_plan", PLAN_SHARE)), float(c.get("ctx_handoff", HANDOFF_SHARE))
     pt = 0 if silent else int(w * plan)
     nt = 0 if silent else int(w * hand)
     if not silent:
@@ -330,6 +331,51 @@ def last_usage_rec(path):
         if n:
             return n, msg.get("model"), _ts(j.get("timestamp"))
     return None, None, None
+
+
+def transcript_model(path):
+    """0.19.0 (R-121): the model of the main chat's newest assistant message. Subagent messages (isSidechain) and
+    subagent transcripts are ignored, so a Haiku helper never relabels the chat."""
+    if not path or "/subagents/" in str(path).replace("\\", "/"):
+        return None
+    try:
+        lines = _tail_lines(path, 200000)
+    except Exception:
+        return None
+    for ln in reversed(lines):
+        if '"assistant"' not in ln or '"model"' not in ln:
+            continue
+        try:
+            j = json.loads(ln)
+        except Exception:
+            continue
+        if j.get("type") != "assistant" or j.get("isSidechain"):
+            continue
+        m = (j.get("message") or {}).get("model")
+        if isinstance(m, str) and m and not m.startswith("<"):
+            return m
+    return None
+
+
+def record_model(inp):
+    """Spool the chat's model each time it changes (/model, fast mode); the harness turns each line into an
+    agent.model_set event on its next sync. Writes nothing when the model is unchanged."""
+    sid, path = inp.get("session_id"), inp.get("transcript_path")
+    if not sid or not path:
+        return None
+    m = transcript_model(path)
+    if not m:
+        return None
+    p = note_path(inp)
+    s = load_note(p)
+    if s.get("model_seen") == m:
+        return None
+    sp = state_path("harness-model-spool.jsonl")   # spool first: a failed write must not mark the change as seen
+    with open(sp, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"session_id": sid, "model": m, "t": time.time()}) + "\n")
+    s["model_seen"] = m
+    save_note(p, s)
+    return m
 
 
 def last_usage(path):
@@ -827,6 +873,27 @@ def on_tool(inp):
     return msg
 
 
+def activity_path(sid):
+    return os.path.join(state_dir(), "hook-activity", re.sub(r"[^A-Za-z0-9_.-]", "_", str(sid))[:80])
+
+
+def touch_activity(inp, t):
+    """0.19.0 (D-c8590 c3): the session's last PostToolUse / UserPromptSubmit time, one tiny file per session. Auto-retire
+    reads it to decide whether a holder is still active (ledger events miss a long task with no harness call)."""
+    try:
+        sid = inp.get("session_id")
+        if not sid:
+            return
+        p = activity_path(sid)
+        os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(repr(float(t)))
+        os.replace(tmp, p)
+    except Exception as e:
+        _log("touch_activity", e)
+
+
 def main():
     try:
         inp = json.load(sys.stdin)
@@ -835,6 +902,7 @@ def main():
     if not isinstance(inp, dict):
         return
     t = time.time()
+    touch_activity(inp, t)
     global CURRENT_ROLE
     try:    # 0.16.3: the role stored from the banner decides the window for this call
         CURRENT_ROLE = load_note(note_path(inp)).get("role") or None
@@ -842,6 +910,10 @@ def main():
         CURRENT_ROLE = None
     ev = inp.get("hook_event_name") or "PostToolUse"
     msgs = []
+    try:   # 0.19.0 (R-121): every model change the transcript shows
+        record_model(inp)
+    except Exception as e:
+        _log("record_model", e)
     try:
         if ev == "UserPromptSubmit":
             for fn_, name_ in ((on_prompt, "on_prompt"), (cold, "cold")):

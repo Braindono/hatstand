@@ -24,7 +24,7 @@ class Windows(unittest.TestCase):
     def test_code_surface_no_longer_raises_the_window(self):     # 0.17.0 R-059: no role -> 500k for every model
         for m in ("claude-sonnet-5-5", "claude-opus-5-5"):
             l = lim(m, "code")
-            self.assertEqual((l["window"], l["plan_tok"], l["handoff_tok"]), (500000, 300000, 400000), m)
+            self.assertEqual((l["window"], l["plan_tok"], l["handoff_tok"]), (500000, 350000, 425000), m)
 
     def test_chat_and_cowork_keep_the_smaller_window(self):
         for surf in ("chat", "cowork"):

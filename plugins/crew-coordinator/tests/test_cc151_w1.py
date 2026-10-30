@@ -289,6 +289,9 @@ class Approvals(Base):
         self.h.store.append("hatstand.synced", cur, {"mode": "dry", "exit": 0, "marketplace": self.h._marketplace_sha()})
         self.as_(cur)
         seen["hatstand_push"] = self.adm("hatstand_sync", cur, push=True)
+        les = self.h.record(cur, "note", "Lesson: t", "What happened: x\nCause: y\nRule: Check twice", ["lesson", "role:all"])["id"]
+        seen["lesson_curate"] = self.adm("lesson_curate", cur, ids=[les])   # 0.19.0 (R-122): no expiry, the operator decides
+        self.assertIsNone(self.h._approval_records()[seen["lesson_curate"]["pending"]]["expires"])
         self.assertEqual(set(seen), set(H.Harness.APPROVAL_ACTIONS))
         for action, r in seen.items():
             self.assertEqual((r.get("action"), r["pending"][:2]), (action, "A-"), (action, r))

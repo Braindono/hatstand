@@ -60,13 +60,13 @@ class SyncLines(Base):
         a = self.h.register(project="orch", model=MODEL)["id"]
         t1 = self.h.sync(a, ctx=10000)["text"]
         t2 = self.h.sync(a, ctx=10000)["text"]
-        self.assertRegex(t1, r"ctx window: 500k \(default; no role yet\), plan 300k, handoff 400k")
+        self.assertRegex(t1, r"ctx window: 500k \(default; no role yet\), plan 350k, handoff 425k")
         self.assertNotIn("ctx window", t2)                 # once per session
         self.assertNotIn("HARNESS_SURFACE", t1)            # no surface hint any more
         with mock.patch.dict(os.environ, {"HARNESS_SURFACE": "code"}):
             b = self.h.register(project="orch", model=MODEL)["id"]
             u1 = self.h.sync(b, ctx=10000)["text"]
-        self.assertIn("ctx window: 500k (default; no role yet), plan 300k, handoff 400k", u1)
+        self.assertIn("ctx window: 500k (default; no role yet), plan 350k, handoff 425k", u1)
 
     def test_unmeasured_and_haiku_silent(self):
         a = self.h.register(project="orch", model=MODEL)["id"]

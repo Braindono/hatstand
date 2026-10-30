@@ -158,6 +158,7 @@ class SyncDefaultHome(Base):
             f.write('{"plugins": []}\n')
         with open(os.path.join(self.new, "_harness", "wake.py"), "w") as f:
             f.write("print('wake')\n")
+        _env.guard_home(self.new)
         bare = os.path.join(self.tmp, "hs.git")
         g = lambda *a, cwd=None: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *a],
                                                 cwd=cwd, capture_output=True, text=True, check=True)

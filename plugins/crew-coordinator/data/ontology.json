@@ -1,0 +1,1034 @@
+{
+ "v": 1,
+ "facets": {
+  "project": "Which project the entry belongs to",
+  "component": "What thing is touched: plugin, skill, script, file, tool, artifact (the object facet; cue keys live here, approved per lesson)",
+  "activity": "What kind of work is going on",
+  "topic": "What subject the entry is about",
+  "failure": "What went wrong (failure mode)",
+  "role": "Who it applies to",
+  "phase": "When in the work cycle",
+  "standing": "How binding it is and who said it",
+  "system": "Machine labels written by the harness; hidden from browsing, never placed by hand"
+ },
+ "buckets": {
+  "reference": "An id or version used as a tag (d-xxxxx, l-0xx, r-0xx, n-/c-/h-/p- ids, 0.17.0, cc190, w1, m7, stage-2): map to reference:<decision|lesson|request|note|version|milestone>; it becomes a ref, not a concept",
+  "noise": "Fragments and accidents (single letters from the old split bug, '-'): list them; no concept"
+ },
+ "concepts": [
+  {
+   "id": "proj.harness-ops",
+   "label": "harness-ops",
+   "facet": "project",
+   "broader": [],
+   "aliases": [
+    "orchestration",
+    "skill-curation",
+    "harness"
+   ]
+  },
+  {
+   "id": "comp.plugin",
+   "label": "plugin",
+   "facet": "component",
+   "broader": [],
+   "aliases": [
+    "plugins"
+   ]
+  },
+  {
+   "id": "comp.crew-coordinator",
+   "label": "crew-coordinator",
+   "facet": "component",
+   "broader": [
+    "comp.plugin"
+   ],
+   "aliases": [
+    "cc",
+    "harness-mcp"
+   ]
+  },
+  {
+   "id": "comp.excellent-etiquette",
+   "label": "excellent-etiquette",
+   "facet": "component",
+   "broader": [
+    "comp.plugin"
+   ],
+   "aliases": [
+    "etiquette",
+    "ee"
+   ]
+  },
+  {
+   "id": "comp.plugin-publications",
+   "label": "plugin-publications",
+   "facet": "component",
+   "broader": [
+    "comp.plugin"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "comp.delegation-desk",
+   "label": "delegation-desk",
+   "facet": "component",
+   "broader": [
+    "comp.plugin"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "comp.other-plugin",
+   "label": "other plugin",
+   "facet": "component",
+   "broader": [
+    "comp.plugin"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "comp.corpus-index",
+   "label": "corpus_index.py (steward script)",
+   "facet": "component",
+   "broader": [
+    "comp.corpus"
+   ],
+   "aliases": [
+    "corpus_index"
+   ]
+  },
+  {
+   "id": "comp.corpus",
+   "label": "corpus (decisions, notes, lessons store)",
+   "facet": "component",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "comp.ledger",
+   "label": "ledger (events.jsonl)",
+   "facet": "component",
+   "broader": [],
+   "aliases": [
+    "events"
+   ]
+  },
+  {
+   "id": "comp.hatstand",
+   "label": "Hatstand public repo and sync",
+   "facet": "component",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "comp.restore-digest",
+   "label": "restore digest",
+   "facet": "component",
+   "broader": [
+    "comp.crew-coordinator"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "comp.lesson-cue",
+   "label": "lesson cue hook",
+   "facet": "component",
+   "broader": [
+    "comp.crew-coordinator"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "comp.vault",
+   "label": "vault",
+   "facet": "component",
+   "broader": [
+    "comp.crew-coordinator"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "comp.transcript-indexer",
+   "label": "transcript indexer",
+   "facet": "component",
+   "broader": [
+    "comp.crew-coordinator"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "comp.hooks",
+   "label": "hooks",
+   "facet": "component",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "comp.config",
+   "label": "config and settings files",
+   "facet": "component",
+   "broader": [],
+   "aliases": [
+    "claude-md",
+    "settings"
+   ]
+  },
+  {
+   "id": "comp.artifact",
+   "label": "artifact or published page",
+   "facet": "component",
+   "broader": [],
+   "aliases": [
+    "dashboard"
+   ]
+  },
+  {
+   "id": "act.release",
+   "label": "release",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "publish",
+    "published"
+   ]
+  },
+  {
+   "id": "act.release-gate",
+   "label": "release gate and ACCEPT",
+   "facet": "activity",
+   "broader": [
+    "act.release",
+    "act.review"
+   ],
+   "aliases": [
+    "accept",
+    "stage-accept",
+    "final-gate",
+    "package-gate",
+    "publish-gate"
+   ]
+  },
+  {
+   "id": "act.release-scope",
+   "label": "release scope and cadence",
+   "facet": "activity",
+   "broader": [
+    "act.release"
+   ],
+   "aliases": [
+    "cadence",
+    "next-release",
+    "release-plan"
+   ]
+  },
+  {
+   "id": "act.install",
+   "label": "install and reload",
+   "facet": "activity",
+   "broader": [
+    "act.release"
+   ],
+   "aliases": [
+    "upgrade",
+    "reload",
+    "plugin-update"
+   ]
+  },
+  {
+   "id": "act.review",
+   "label": "review and audit",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "audit",
+    "inspection"
+   ]
+  },
+  {
+   "id": "act.verdict",
+   "label": "verdict (accept, reject, ruling)",
+   "facet": "activity",
+   "broader": [
+    "act.review"
+   ],
+   "aliases": [
+    "ruling",
+    "rulings",
+    "reject"
+   ]
+  },
+  {
+   "id": "act.handoff",
+   "label": "handoff and continuity",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "handover",
+    "continuity",
+    "succession"
+   ]
+  },
+  {
+   "id": "act.restore",
+   "label": "restore a role in a new chat",
+   "facet": "activity",
+   "broader": [
+    "act.handoff"
+   ],
+   "aliases": [
+    "restore-drill"
+   ]
+  },
+  {
+   "id": "act.wake",
+   "label": "wake, idle and listen",
+   "facet": "activity",
+   "broader": [
+    "act.handoff"
+   ],
+   "aliases": [
+    "idle-wake",
+    "self-wake"
+   ]
+  },
+  {
+   "id": "act.corpus-maintenance",
+   "label": "corpus maintenance",
+   "facet": "activity",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "act.prune",
+   "label": "prune and archive",
+   "facet": "activity",
+   "broader": [
+    "act.corpus-maintenance"
+   ],
+   "aliases": [
+    "archive",
+    "cleanup"
+   ]
+  },
+  {
+   "id": "act.pin",
+   "label": "pin",
+   "facet": "activity",
+   "broader": [
+    "act.corpus-maintenance"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "act.retag",
+   "label": "retag and reclassify",
+   "facet": "activity",
+   "broader": [
+    "act.corpus-maintenance"
+   ],
+   "aliases": [
+    "classification",
+    "bulk-classification"
+   ]
+  },
+  {
+   "id": "act.steward-pass",
+   "label": "steward pass",
+   "facet": "activity",
+   "broader": [
+    "act.corpus-maintenance"
+   ],
+   "aliases": [
+    "steward-schedule"
+   ]
+  },
+  {
+   "id": "act.planning",
+   "label": "planning and specs",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "plan",
+    "plans",
+    "spec",
+    "roadmap"
+   ]
+  },
+  {
+   "id": "act.build",
+   "label": "build",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "build-process"
+   ]
+  },
+  {
+   "id": "act.evaluation",
+   "label": "evaluation and experiments",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "evals",
+    "eval-loop",
+    "measurement"
+   ]
+  },
+  {
+   "id": "act.memory-test",
+   "label": "memory tests and replay",
+   "facet": "activity",
+   "broader": [
+    "act.evaluation"
+   ],
+   "aliases": [
+    "memtest",
+    "replay",
+    "replay-pilot",
+    "pilot"
+   ]
+  },
+  {
+   "id": "act.communication",
+   "label": "communication and mail",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "mail",
+    "nudge",
+    "doorbell",
+    "briefing"
+   ]
+  },
+  {
+   "id": "act.questionnaire",
+   "label": "questions to the operator",
+   "facet": "activity",
+   "broader": [
+    "act.communication"
+   ],
+   "aliases": [
+    "questions"
+   ]
+  },
+  {
+   "id": "act.delegation",
+   "label": "delegation to subagents",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "agent-delegation",
+    "subagent",
+    "subagents",
+    "swarm"
+   ]
+  },
+  {
+   "id": "act.migration",
+   "label": "migration and moves",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "cutover",
+    "exchange-move",
+    "rename",
+    "pc-migration"
+   ]
+  },
+  {
+   "id": "act.research",
+   "label": "research",
+   "facet": "activity",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "act.ideation",
+   "label": "ideas and dreaming",
+   "facet": "activity",
+   "broader": [],
+   "aliases": [
+    "idea",
+    "idea-queue"
+   ]
+  },
+  {
+   "id": "top.memory",
+   "label": "memory and learning",
+   "facet": "topic",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "top.lessons",
+   "label": "lessons",
+   "facet": "topic",
+   "broader": [
+    "top.memory"
+   ],
+   "aliases": [
+    "lesson"
+   ]
+  },
+  {
+   "id": "top.learning-from-failure",
+   "label": "learning from failure",
+   "facet": "topic",
+   "broader": [
+    "top.memory"
+   ],
+   "aliases": [
+    "learning-loop",
+    "failure-noticed"
+   ]
+  },
+  {
+   "id": "top.tagging",
+   "label": "tags and ontology",
+   "facet": "topic",
+   "broader": [
+    "top.memory"
+   ],
+   "aliases": [
+    "tags",
+    "ontology"
+   ]
+  },
+  {
+   "id": "top.identity",
+   "label": "identity, roles and lineage",
+   "facet": "topic",
+   "broader": [],
+   "aliases": [
+    "roles",
+    "lineage",
+    "registration",
+    "roster"
+   ]
+  },
+  {
+   "id": "top.model-provenance",
+   "label": "model provenance",
+   "facet": "topic",
+   "broader": [
+    "top.identity"
+   ],
+   "aliases": [
+    "model-change",
+    "model-tag"
+   ]
+  },
+  {
+   "id": "top.governance",
+   "label": "governance and authority",
+   "facet": "topic",
+   "broader": [],
+   "aliases": [
+    "authority",
+    "ownership",
+    "permissions"
+   ]
+  },
+  {
+   "id": "top.autonomy",
+   "label": "autonomy: act or ask",
+   "facet": "topic",
+   "broader": [
+    "top.governance"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "top.approvals",
+   "label": "approvals and overrides",
+   "facet": "topic",
+   "broader": [
+    "top.governance"
+   ],
+   "aliases": [
+    "approval",
+    "override",
+    "waiver",
+    "gate-override"
+   ]
+  },
+  {
+   "id": "top.security",
+   "label": "security and privacy",
+   "facet": "topic",
+   "broader": [],
+   "aliases": [
+    "privacy",
+    "confidentiality",
+    "security-review"
+   ]
+  },
+  {
+   "id": "top.tokens",
+   "label": "token cost and context",
+   "facet": "topic",
+   "broader": [],
+   "aliases": [
+    "token-economy",
+    "token-cost",
+    "spend"
+   ]
+  },
+  {
+   "id": "top.context-window",
+   "label": "context window and thresholds",
+   "facet": "topic",
+   "broader": [
+    "top.tokens"
+   ],
+   "aliases": [
+    "ctx",
+    "ctx-thresholds"
+   ]
+  },
+  {
+   "id": "top.etiquette",
+   "label": "working etiquette and process",
+   "facet": "topic",
+   "broader": [],
+   "aliases": [
+    "process",
+    "procedure",
+    "best-practices"
+   ]
+  },
+  {
+   "id": "top.drift",
+   "label": "version and code drift",
+   "facet": "topic",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "fail.defect",
+   "label": "defect in code",
+   "facet": "failure",
+   "broader": [],
+   "aliases": [
+    "bug",
+    "regression"
+   ]
+  },
+  {
+   "id": "fail.unchecked-claim",
+   "label": "unchecked or wrong claim",
+   "facet": "failure",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "fail.lost-memory",
+   "label": "lost or unseen memory",
+   "facet": "failure",
+   "broader": [],
+   "aliases": [
+    "lost-lesson"
+   ]
+  },
+  {
+   "id": "fail.wrong-id",
+   "label": "wrong or stale id",
+   "facet": "failure",
+   "broader": [
+    "fail.unchecked-claim"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "fail.scope-drift",
+   "label": "scope drift",
+   "facet": "failure",
+   "broader": [],
+   "aliases": [
+    "deviation"
+   ]
+  },
+  {
+   "id": "fail.env-dependent",
+   "label": "environment-dependent result",
+   "facet": "failure",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "fail.process-break",
+   "label": "process or rule broken",
+   "facet": "failure",
+   "broader": [],
+   "aliases": [
+    "incident",
+    "correction"
+   ]
+  },
+  {
+   "id": "role.all",
+   "label": "all roles",
+   "facet": "role",
+   "broader": [],
+   "aliases": [
+    "all-agents",
+    "all-roles",
+    "role:all"
+   ]
+  },
+  {
+   "id": "role.envoy",
+   "label": "envoy",
+   "facet": "role",
+   "broader": [
+    "role.all"
+   ],
+   "aliases": [
+    "corpus-envoy"
+   ]
+  },
+  {
+   "id": "role.steward",
+   "label": "steward",
+   "facet": "role",
+   "broader": [
+    "role.all"
+   ],
+   "aliases": [
+    "corpus-steward"
+   ]
+  },
+  {
+   "id": "role.curator",
+   "label": "curator",
+   "facet": "role",
+   "broader": [
+    "role.all"
+   ],
+   "aliases": [
+    "skill-curation-lead"
+   ]
+  },
+  {
+   "id": "role.ops-coder",
+   "label": "ops-coder",
+   "facet": "role",
+   "broader": [
+    "role.all"
+   ],
+   "aliases": [
+    "claude-code",
+    "coder-pack"
+   ]
+  },
+  {
+   "id": "role.harness-critic",
+   "label": "harness-critic",
+   "facet": "role",
+   "broader": [
+    "role.all"
+   ],
+   "aliases": [
+    "role:harness-critic"
+   ]
+  },
+  {
+   "id": "role.secretary",
+   "label": "secretary",
+   "facet": "role",
+   "broader": [
+    "role.all"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "role.research-lead",
+   "label": "research-lead",
+   "facet": "role",
+   "broader": [
+    "role.all"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "role.operator",
+   "label": "operator",
+   "facet": "role",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "phase.plan",
+   "label": "plan",
+   "facet": "phase",
+   "broader": [],
+   "aliases": [
+    "stage-0",
+    "phase-0"
+   ]
+  },
+  {
+   "id": "phase.build",
+   "label": "build",
+   "facet": "phase",
+   "broader": [],
+   "aliases": [
+    "stage-1"
+   ]
+  },
+  {
+   "id": "phase.verify",
+   "label": "verify",
+   "facet": "phase",
+   "broader": [],
+   "aliases": [
+    "verification",
+    "verify",
+    "verified",
+    "spot-check",
+    "retest",
+    "live-check",
+    "stage-2"
+   ]
+  },
+  {
+   "id": "phase.publish",
+   "label": "publish",
+   "facet": "phase",
+   "broader": [],
+   "aliases": [
+    "stage-3"
+   ]
+  },
+  {
+   "id": "phase.after-install",
+   "label": "after install",
+   "facet": "phase",
+   "broader": [],
+   "aliases": [
+    "post-install"
+   ]
+  },
+  {
+   "id": "phase.startup",
+   "label": "session start",
+   "facet": "phase",
+   "broader": [],
+   "aliases": [
+    "startup",
+    "start"
+   ]
+  },
+  {
+   "id": "std.operator-decision",
+   "label": "operator decision",
+   "facet": "standing",
+   "broader": [],
+   "aliases": [
+    "operator-approved",
+    "operator-answer",
+    "operator-answers"
+   ]
+  },
+  {
+   "id": "std.operator-rule",
+   "label": "standing operator rule",
+   "facet": "standing",
+   "broader": [
+    "std.operator-decision"
+   ],
+   "aliases": [
+    "standing-rule",
+    "rules"
+   ]
+  },
+  {
+   "id": "std.operator-preference",
+   "label": "operator preference",
+   "facet": "standing",
+   "broader": [
+    "std.operator-decision"
+   ],
+   "aliases": [
+    "operator-pref",
+    "preference"
+   ]
+  },
+  {
+   "id": "std.operator-verbatim",
+   "label": "operator's own words",
+   "facet": "standing",
+   "broader": [],
+   "aliases": [
+    "operator-words",
+    "operator-verbatim"
+   ]
+  },
+  {
+   "id": "std.remember-this",
+   "label": "remember this",
+   "facet": "standing",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "std.pinned",
+   "label": "pinned or pin candidate",
+   "facet": "standing",
+   "broader": [],
+   "aliases": [
+    "pin",
+    "pin-candidate"
+   ]
+  },
+  {
+   "id": "std.open",
+   "label": "open, to do or on hold",
+   "facet": "standing",
+   "broader": [],
+   "aliases": [
+    "todo",
+    "backlog",
+    "hold",
+    "deferred",
+    "pause",
+    "operator-decision-needed"
+   ]
+  },
+  {
+   "id": "std.closed",
+   "label": "resolved or closed",
+   "facet": "standing",
+   "broader": [],
+   "aliases": [
+    "resolved",
+    "closed",
+    "confirmed"
+   ]
+  },
+  {
+   "id": "std.draft",
+   "label": "draft or proposal",
+   "facet": "standing",
+   "broader": [],
+   "aliases": [
+    "proposal"
+   ]
+  },
+  {
+   "id": "sys.role-state",
+   "label": "role state note",
+   "facet": "system",
+   "broader": [],
+   "aliases": [
+    "role-state:*",
+    "handoff-state"
+   ]
+  },
+  {
+   "id": "sys.handoff",
+   "label": "handoff capsule marker",
+   "facet": "system",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "sys.model",
+   "label": "model label",
+   "facet": "system",
+   "broader": [],
+   "aliases": [
+    "model:*"
+   ]
+  },
+  {
+   "id": "sys.precompact",
+   "label": "pre-compaction save",
+   "facet": "system",
+   "broader": [],
+   "aliases": []
+  },
+  {
+   "id": "sys.topic",
+   "label": "role-state topic",
+   "facet": "system",
+   "broader": [],
+   "aliases": [
+    "topic:*"
+   ]
+  },
+  {
+   "id": "comp.claude-surface",
+   "label": "Claude app surface (Code tab, Cowork, cloud session, Remote Control)",
+   "facet": "component",
+   "broader": [],
+   "aliases": [
+    "code-tab",
+    "code-tab-pilot",
+    "cowork",
+    "cloud",
+    "remote-control",
+    "remote-devices",
+    "surface"
+   ]
+  },
+  {
+   "id": "comp.mcp-server",
+   "label": "MCP server or tool",
+   "facet": "component",
+   "broader": [],
+   "aliases": [
+    "mcp",
+    "visualize"
+   ]
+  },
+  {
+   "id": "comp.scheduler",
+   "label": "local scheduler and scheduled tasks",
+   "facet": "component",
+   "broader": [],
+   "aliases": [
+    "launchd",
+    "scheduled-tasks"
+   ]
+  },
+  {
+   "id": "comp.harness-router",
+   "label": "harness-router plugin (registry: live 0.12.4)",
+   "facet": "component",
+   "broader": [
+    "comp.plugin"
+   ],
+   "aliases": [
+    "harness-router",
+    "hr"
+   ]
+  },
+  {
+   "id": "top.concurrency",
+   "label": "leases, locks and version checks",
+   "facet": "topic",
+   "broader": [],
+   "aliases": [
+    "coordination",
+    "leases",
+    "lease",
+    "locks"
+   ]
+  },
+  {
+   "id": "top.architecture",
+   "label": "architecture and org model (layout, addressing, dependencies)",
+   "facet": "topic",
+   "broader": [],
+   "aliases": [
+    "org",
+    "architecture",
+    "layout",
+    "folders",
+    "infra"
+   ]
+  }
+ ]
+}

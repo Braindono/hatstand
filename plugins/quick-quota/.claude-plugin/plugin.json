@@ -1,0 +1,10 @@
+{
+  "name": "quick-quota",
+  "version": "0.1.0",
+  "description": "A band above the prompt showing your 5-hour and weekly usage quota and when each resets.",
+  "types": "./types/index.d.ts",
+  "license": "MIT",
+  "author": {
+    "name": "BT Frederick"
+  }
+}

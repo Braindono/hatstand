@@ -33,6 +33,7 @@ class Hatstand(unittest.TestCase):
             f.write('{"name": "demo", "version": "1.0.0"}\n')
         with open(os.path.join(mk, ".claude-plugin", "marketplace.json"), "w") as f:
             f.write('{"plugins": []}\n')
+        _env.guard_home(self.home)
         with open(os.path.join(self.home, "_harness", "wake.py"), "w") as f:
             f.write("print('wake')\n")
         self.bare = os.path.join(self.tmp, "hatstand.git")

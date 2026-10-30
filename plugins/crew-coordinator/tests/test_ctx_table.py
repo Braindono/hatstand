@@ -42,23 +42,23 @@ class Table(Base):
     def test_role_in_the_1m_list_any_model_any_surface(self):
         for m in (SONNET, OPUS, "claude-fable-5-1"):
             for path in (CODE_PATH, COWORK_PATH, None, "/somewhere/else.jsonl"):
-                self.assertEqual(self.lim(m, path, "ops-coder"), (1000000, 600000, 800000), (m, path))
+                self.assertEqual(self.lim(m, path, "ops-coder"), (1000000, 700000, 850000), (m, path))
 
     def test_other_role_or_no_role_gets_500k_any_model_any_surface(self):
         for role in ("secretary", "letters-manager", None):
             for m in (SONNET, OPUS, "claude-other-1"):
                 for path in (CODE_PATH, COWORK_PATH, None):
-                    self.assertEqual(self.lim(m, path, role), (500000, 300000, 400000), (role, m, path))
+                    self.assertEqual(self.lim(m, path, role), (500000, 350000, 425000), (role, m, path))
 
     def test_surface_env_no_longer_changes_the_window(self):
         for surf in ("code", "chat", "cowork"):
             os.environ["HARNESS_SURFACE"] = surf
-            self.assertEqual(self.lim(SONNET, None, "secretary"), (500000, 300000, 400000), surf)
-            self.assertEqual(self.lim(OPUS, None, "envoy"), (1000000, 600000, 800000), surf)
+            self.assertEqual(self.lim(SONNET, None, "secretary"), (500000, 350000, 425000), surf)
+            self.assertEqual(self.lim(OPUS, None, "envoy"), (1000000, 700000, 850000), surf)
 
     def test_no_config_file(self):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "_harness")))
-        self.assertEqual(self.lim(SONNET, CODE_PATH, "curator"), (1000000, 600000, 800000))
+        self.assertEqual(self.lim(SONNET, CODE_PATH, "curator"), (1000000, 700000, 850000))
 
     def test_no_per_model_table_left(self):
         self.assertFalse(hasattr(H, "CTX_TABLE"))
@@ -67,12 +67,12 @@ class Table(Base):
 class Overrides(Base):
     def test_legacy_model_keys_are_ignored(self):
         self.config({"ctx_window_by_model": {SONNET: 250000}, "ctx_table": {SONNET: {"window": {"code": 800000}}}})
-        self.assertEqual(self.lim(SONNET, CODE_PATH, "secretary"), (500000, 300000, 400000))
-        self.assertEqual(self.lim(SONNET, CODE_PATH, "envoy"), (1000000, 600000, 800000))
+        self.assertEqual(self.lim(SONNET, CODE_PATH, "secretary"), (500000, 350000, 425000))
+        self.assertEqual(self.lim(SONNET, CODE_PATH, "envoy"), (1000000, 700000, 850000))
 
     def test_default_window_from_config(self):
         self.config({"ctx_window": 400000})
-        self.assertEqual(self.lim(SONNET, None, "secretary"), (400000, 240000, 320000))
+        self.assertEqual(self.lim(SONNET, None, "secretary"), (400000, 280000, 340000))
         self.assertEqual(self.lim(SONNET, None, "envoy")[0], 1000000)   # the role window is not the default
 
     def test_absolute_token_override(self):
@@ -81,7 +81,7 @@ class Overrides(Base):
 
     def test_zero_tokens_do_not_turn_off(self):
         self.config({"ctx_plan_tokens": 0, "ctx_handoff_tokens": 0})
-        self.assertEqual(self.lim(SONNET, CODE_PATH, "envoy"), (1000000, 600000, 800000))
+        self.assertEqual(self.lim(SONNET, CODE_PATH, "envoy"), (1000000, 700000, 850000))
 
     def test_shares_from_config_apply_to_every_role(self):
         self.config({"ctx_plan": 0.7, "ctx_handoff": 0.85})
@@ -92,10 +92,10 @@ class Overrides(Base):
 class Bands(Base):
     def test_band_for_uses_the_role_window(self):
         H.CURRENT_ROLE = None
-        self.assertEqual(H.band_for(599999, model=SONNET, path=CODE_PATH, role="envoy")[0], "ok")
-        self.assertEqual(H.band_for(600000, model=SONNET, path=CODE_PATH, role="envoy")[0], "plan")
-        self.assertEqual(H.band_for(800000, model=SONNET, path=CODE_PATH, role="envoy")[0], "now")
-        self.assertEqual(H.band_for(300000, model=SONNET, path=CODE_PATH)[0], "plan")    # no role: the 500k window
+        self.assertEqual(H.band_for(699999, model=SONNET, path=CODE_PATH, role="envoy")[0], "ok")
+        self.assertEqual(H.band_for(700000, model=SONNET, path=CODE_PATH, role="envoy")[0], "plan")
+        self.assertEqual(H.band_for(850000, model=SONNET, path=CODE_PATH, role="envoy")[0], "now")
+        self.assertEqual(H.band_for(350000, model=SONNET, path=CODE_PATH)[0], "plan")    # no role: the 500k window
 
     def test_haiku_silent_at_any_size(self):
         for n in (1000, 90000, 120000, 190000, 400000):
@@ -124,8 +124,8 @@ class Printed(Base):
         os.environ["HARNESS_SURFACE"] = "code"
         H.CURRENT_ROLE = None
         g = self._gauge(SONNET, 350000)          # no role known: the one 500k window, whatever the surface says
-        self.assertIn("plan 300k", g)
-        self.assertIn("handoff 400k", g)
+        self.assertIn("plan 350k", g)
+        self.assertIn("handoff 425k", g)
         self.assertIn("500k window", g)
 
     def test_haiku_prints_nothing(self):

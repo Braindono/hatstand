@@ -69,3 +69,8 @@ A Stop hook adds one reminder line if a reply had no inbox call.
 ## Threads (moved from SKILL.md)
 `reply_to` continues a thread. Loop guard refusal → `operator` `question`. Task states: `harness_admin op=task_update`.
 
+
+- Recall by id (0.20.0): pass `query=<your question>` with `ids=`; the reply shows each id's title and the 5 best matches. If a lookup gave the wrong entry or nothing useful, say so with `miss=<what was wrong>` on your next harness_recall.
+
+## Corpus/lint WARN (moved verbatim from SKILL.md in 0.21.0)
+- Corpus/lint WARN: fix own files, send kind=review to the owner role at once; never ask the operator to (D-1e728).

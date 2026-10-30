@@ -109,6 +109,14 @@ class Guard(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.root, True)
+        # 0.21.0 (A-5a989 item 9): the guard fails closed without a home, so these unit cases get a prepared one unless they pass their own
+        self.ghome = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.ghome, True)
+        _env.guard_home(self.ghome)
+        orig = G.check
+        p = mock.patch.object(G, "check", lambda root, names, home="__default__": orig(root, names, self.ghome if home == "__default__" else home))
+        p.start()
+        self.addCleanup(p.stop)
 
     def put(self, name, text):
         p = os.path.join(self.root, name)
@@ -165,7 +173,8 @@ class Guard(unittest.TestCase):
             f.write(json.dumps({"type": "corpus.recorded", "data": {"title": title}}) + "\n")
             f.write(json.dumps({"type": "corpus.recorded", "data": {"title": "short title"}}) + "\n")
         n = self.put("plugins/demo/notes.md", "intro\n" + title + "\n")
-        self.assertEqual(G.check(self.root, [n]), [])                      # no HARNESS_HOME: title check off
+        self.assertEqual(G.check(self.root, [n]), [])                      # the default test home holds no such title
+        _env.guard_home(home)
         hits = G.check(self.root, [n], home)
         self.assertTrue(hits and "corpus title" in hits[0][1])
         m = self.put("plugins/demo/ok.md", "short title\n")                 # titles under 40 chars are not checked
@@ -242,6 +251,7 @@ class SyncScript(unittest.TestCase):
             f.write('{"plugins": []}\n')
         with open(os.path.join(self.home, "_harness", "wake.py"), "w") as f:
             f.write("print('wake')\n")
+        _env.guard_home(self.home)
         self.title = "Operator standing rule about something private and long enough"
         with open(os.path.join(self.home, "_harness", "events.jsonl"), "w") as f:
             f.write(json.dumps({"type": "corpus.recorded", "data": {"title": self.title}}) + "\n")

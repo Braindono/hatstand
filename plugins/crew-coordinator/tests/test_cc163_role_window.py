@@ -26,7 +26,7 @@ class RoleWindow(unittest.TestCase):
         for role in ("ops-coder", "design-coder", "envoy", "curator"):
             for m in (SONNET, OPUS):
                 l = lim(m, role)
-                self.assertEqual((l["window"], l["plan_tok"], l["handoff_tok"]), (1000000, 600000, 800000), (role, m))
+                self.assertEqual((l["window"], l["plan_tok"], l["handoff_tok"]), (1000000, 700000, 850000), (role, m))
 
     def test_other_roles_keep_the_table(self):
         for role in ("secretary", "letters-manager", "design-system", None):

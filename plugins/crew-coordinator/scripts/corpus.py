@@ -288,7 +288,7 @@ class Corpus:
         return reason
 
     def _review_models(self, actor, review):
-        """D-15566 P4: a /health review (D-70499) records drafter_model (the Haiku worker) and lead_model."""
+        """D-15566 P4: a /health run (D-70499) records drafter_model (the Haiku worker) and lead_model."""
         if not review:
             return {}
         d = review.get("drafter_model") or "unknown"
@@ -526,6 +526,44 @@ class Corpus:
                                "AND (' '||tags||' ') LIKE ? ORDER BY seq DESC, id LIMIT ?",
                                (f"% {tag.lower()} %", max(1, int(limit)))).fetchall()
         return [dict(zip(("id", "title", "body", "tags", "agent", "role", "ts", "seq"), r)) for r in rows]
+
+    _CARD_COLS = "id,kind,title,tags,agent_name,ts,tokens,offload,superseded_by,expires,seq"
+    _CARD_KEYS = ("id", "kind", "title", "tags", "by", "ts", "tokens", "offload", "superseded_by", "expires", "seq")
+
+    def all_tags(self):
+        """0.20.0 (A-2b70b): every tag on a live entry (for the record-time spelling check)."""
+        self.refresh()
+        out = set()
+        for (t,) in self.db.execute("SELECT tags FROM entries WHERE superseded_by=''"):
+            out.update((t or "").split())
+        return out
+
+    def rows_by_ids(self, ids):
+        """0.20.0: card rows of live entries by id (any order); archived and superseded ones are left out."""
+        self.refresh()
+        out = []
+        for i in range(0, len(ids), 400):
+            part = ids[i:i + 400]
+            out += self.db.execute(f"SELECT {self._CARD_COLS} FROM entries WHERE superseded_by='' AND id IN ({','.join('?' * len(part))})", part).fetchall()
+        return [dict(zip(self._CARD_KEYS, r)) for r in out]
+
+    def rows_with_any_tag(self, tags, cap=500):
+        """0.20.0: card rows of live entries carrying any of `tags` (legacy-tag hits for recall concept=); ruled-out notes excluded."""
+        self.refresh()
+        tags = [t.lower() for t in tags if t]
+        out = []
+        for i in range(0, len(tags), 60):
+            part = tags[i:i + 60]
+            where = " OR ".join("(' '||tags||' ') LIKE ?" for _ in part)
+            out += self.db.execute(f"SELECT {self._CARD_COLS} FROM entries WHERE superseded_by='' AND ({where}) "
+                                   f"AND (' '||tags||' ') NOT LIKE '% ruled-out %' ORDER BY seq DESC LIMIT ?",
+                                   [f"% {t} %" for t in part] + [cap]).fetchall()
+        seen, rows = set(), []
+        for r in out:
+            if r[0] not in seen:
+                seen.add(r[0])
+                rows.append(dict(zip(self._CARD_KEYS, r)))
+        return rows[:cap]
 
     def search_all(self, query=None, page=100, cap=5000, **flt):
         """0.17.0 (R-065): every match, paged in steps of `page` (the clamp), at most `cap` rows."""

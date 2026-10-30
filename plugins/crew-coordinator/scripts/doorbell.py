@@ -74,6 +74,17 @@ def _skip(h, frm, msg, to, reason):
 
 # ---------------------------------------------------------------- nudge on send
 
+def _do_one(st, rid, a, title, line):
+    """0.21.0 (A-ae352 item 7): send only to a ListAgents row whose name EQUALS the recipient's title; none or several rows: skip (the mail
+    waits). Without a reported title (migration, old titles such as CODER never match) the match is the full harness name as a phrase and
+    the role as a word, case-insensitive, and still exactly one row."""
+    name, role = a.get("sobriquet") or rid[:8], st.role_of(rid)
+    if title:
+        return (f'Do: SendMessage to "{title}": {line} (only if ListAgents shows exactly ONE live row whose name equals this title exactly, '
+                f"checked now, not from memory; none or several: skip, the mail waits)")
+    return (f'Do: SendMessage to {name}: {line} (no chat title on record yet: only if ListAgents shows exactly ONE row whose name contains '
+            f'"{name}" as a phrase{f" and the word {role}" if role else ""}, case-insensitive; else skip, the mail waits)')
+
 def attach_nudge(h, sender_ref, result):
     """Add `nudge` (and `skipped`) to a send result. Never raises; a failure leaves the result as it was."""
     try:
@@ -139,12 +150,13 @@ def _attach(h, sender_ref, r):
     line = (f"Mail {mid} from {srole or sname}, thread {m['thread']}. Run harness_inbox (CLI: harness.py inbox --agent "
             f"<your id> --peek), reply with send reply_to {mid}.")
     ids = [rid for rid, _ in targets]
-    h.store.append("nudge.sent", "system", {"msg": mid, "from": sender, "to": ids, "thread": m["thread"]})
+    titles = [st.title_of(rid) for rid, _ in targets]
+    h.store.append("nudge.sent", "system", {"msg": mid, "from": sender, "to": ids, "thread": m["thread"],
+                                            "titled": [bool(t) for t in titles]})     # 0.21.0 (R5): how many nudges still run on the migration path
     n_hour = sum(1 for e in sent if e["data"].get("from") == sender) + 1
-    out["nudge"] = {"line": line, "to": [a.get("sobriquet") for _, a in targets], "msg_id": mid, "thread": m["thread"],
+    out["nudge"] = {"line": line, "to": [st.name_role(rid) for rid, _ in targets], "titles": titles, "msg_id": mid, "thread": m["thread"],
                     "cap_state": f"{n_hour}/{cfg['nudge_per_agent_hour']} this hour",
-                    "do": "Do: SendMessage to " + " and ".join(a.get("sobriquet") or rid[:8] for rid, a in targets)
-                          + f": {line} (skip if ListAgents does not list it; the mail waits)"}
+                    "do": " ; ".join(_do_one(st, rid, a, t, line) for (rid, a), t in zip(targets, titles))}
     return out
 
 
