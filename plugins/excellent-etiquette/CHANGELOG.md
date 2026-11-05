@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.11 (2026-11-05)
+Scope (operator-approved, record A-89967, ruling 11-05): Add skill laconic: reply-shaping rules in our own words, body under 600 tokens; nothing else changes; No copied dictionary, no web lookups, no 80 percent rule; the package stays uninstalled; Mail between agents keeps its reason field; warm talk exempt; operator can say full detail; Critic measures one week: replies 25 percent shorter, reasons kept 18 of 20, no extra re-asks; Stop rule: a missed measure gets one rewrite round; two misses in a row drop the skill
+- Add skill laconic: reply-shaping rules in our own words, body under 600 tokens; nothing else changes
+- No copied dictionary, no web lookups, no 80 percent rule; the package stays uninstalled
+- Mail between agents keeps its reason field; warm talk exempt; operator can say full detail
+- Critic measures one week: replies 25 percent shorter, reasons kept 18 of 20, no extra re-asks
+- Stop rule: a missed measure gets one rewrite round; two misses in a row drop the skill
+
+## 0.2.10 (2026-10-30)
+Scope (operator-approved, D-6385f and D-e7e43, record A-dae49; replaces A-9bec9 and A-96eab): autonomy skill: self-report rule (D-f83f8 H4): on your own miss, mail role:secretary unprompted with what happened, the cause and the fix; Shared Claude Doc rules (D-8a505, D-74864, D-a8292): one doc per multi-agent document, with status and Members tables; rationale and rebuttal comments; check your access first; design-rules skill: assume more than one design system (D-3f44f); P-70 and P-71 name no single system as the default
+- autonomy skill: self-report rule (D-f83f8 H4): new P-109 in skills/autonomy/SKILL.md, text from the envoy (m-3131ac98d4ef), shortened to one line; the index maps P-109 to autonomy.
+- Shared Claude Doc rules (D-8a505, D-74864, D-a8292): new P-110 in skills/continuity/SKILL.md (summary line), full text in the new skills/continuity/references/shared-docs.md; the index maps P-110 to continuity.
+- design-rules skill: assume more than one design system (D-3f44f); P-70 and P-71 name no single system as the default: P-70 now reads "use the tokens file of the design system assigned to the project or artifact (e.g. LucentDS tokens.css)"; P-71's letter-font exemption is from "the assigned design system's type".
+- autonomy body held at <=600 tokens: P-109 and P-85 full text moved verbatim to skills/autonomy/references/more.md; the body keeps one trigger-summary line for each.
+
 ## 0.2.9 (2026-10-24)
 Scope (operator-approved, D-fffe6, record A-d8b95): R-064 operator preferences in skill text; R-067 flag-it definition in skill text; R-066 lessons rule in skill text; R-044 second reviewer rule for the final ACCEPT; R-057 release cadence rule text
 - R-064 operator preferences in skill text: communication P-99 amended (dry run alone first, one command per id for prompting commands, paste with a leading !; replaces "join several with &&"), P-102 skepticism and gauge not guesses, P-103 a named tool describes the goal and a better way is always offered (D-24743, D-1aeb7, D-40d27, L-010, L-011).

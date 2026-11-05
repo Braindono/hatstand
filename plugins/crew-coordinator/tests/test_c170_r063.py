@@ -26,13 +26,71 @@ class Mirror(unittest.TestCase):
         self.assertIn("role-aliases.json", os.listdir(os.path.join(self.hd, "data")))
         self.assertIn("nouns.md", os.listdir(os.path.join(self.hd, "data")))
 
-    def test_stale_data_file_is_archived_not_deleted(self):
-        os.makedirs(os.path.join(self.hd, "data"))
-        with open(os.path.join(self.hd, "data", "old-table.json"), "w") as f:
+    # ---- 0.21.1 (A-58ff8 item 5): the mirror archives only files a PREVIOUS publish copied (_harness/data/.mirrored.json)
+    LOCAL = {"ontology-mapping.json": "{}", "lesson_cues.json": "{}", "my.local.json": "{}", "hatstand-private-terms.txt": "x\n", "notes.md": "n\n"}
+
+    def put_local(self):
+        d = os.path.join(self.hd, "data")
+        os.makedirs(d, exist_ok=True)
+        for n, t in self.LOCAL.items():
+            with open(os.path.join(d, n), "w") as f:
+                f.write(t)
+        return d
+
+    def test_local_files_survive_every_publish(self):
+        d = self.put_local()
+        for _ in range(3):
+            r = self.h._mirror_launcher(ROOT)
+            self.assertNotIn("data_archived", r)
+        for n in self.LOCAL:
+            self.assertTrue(os.path.isfile(os.path.join(d, n)), n)
+        self.assertFalse(os.path.exists(os.path.join(d, "_archive")))
+
+    def test_first_publish_with_no_manifest_archives_nothing(self):
+        d = os.path.join(self.hd, "data")
+        os.makedirs(d)
+        with open(os.path.join(d, "old-table.json"), "w") as f:
             f.write("{}")
         r = self.h._mirror_launcher(ROOT)
+        self.assertNotIn("data_archived", r)
+        self.assertTrue(os.path.isfile(os.path.join(d, "old-table.json")))
+
+    def test_a_file_the_last_publish_copied_and_the_package_dropped_is_archived_not_deleted(self):
+        d = os.path.join(self.hd, "data")
+        os.makedirs(d)
+        with open(os.path.join(d, "old-table.json"), "w") as f:
+            f.write('{"a": 1}')
+        with open(os.path.join(d, ".mirrored.json"), "w") as f:
+            json.dump({"files": ["old-table.json", "role-aliases.json"]}, f)           # the previous publish copied it
+        self.put_local()
+        r = self.h._mirror_launcher(ROOT)
         self.assertEqual(r.get("data_archived"), 1)
-        self.assertTrue(os.path.isfile(os.path.join(self.hd, "data", "_archive", "old-table.json")))
+        self.assertFalse(os.path.exists(os.path.join(d, "old-table.json")))
+        with open(os.path.join(d, "_archive", "old-table.json")) as f:
+            self.assertEqual(f.read(), '{"a": 1}')                                         # archived intact, never deleted
+        for n in self.LOCAL:
+            self.assertTrue(os.path.isfile(os.path.join(d, n)), n)
+
+    def test_the_manifest_is_rewritten_each_publish_and_is_never_archived(self):
+        r1 = self.h._mirror_launcher(ROOT)
+        mf = os.path.join(self.hd, "data", ".mirrored.json")
+        with open(mf) as f:
+            m1 = json.load(f)["files"]
+        self.assertEqual(len(m1), r1["data"])
+        self.assertEqual(sorted(m1), sorted(x for x in os.listdir(os.path.join(ROOT, "data")) if x.endswith((".json", ".md"))))
+        with open(mf, "w") as f:
+            json.dump({"files": ["gone.json"]}, f)
+        self.h._mirror_launcher(ROOT)
+        with open(mf) as f:
+            self.assertEqual(json.load(f)["files"], m1)
+        self.assertTrue(os.path.isfile(mf))
+        self.assertFalse(os.path.exists(os.path.join(self.hd, "data", "_archive", ".mirrored.json")))
+
+    def test_a_byte_mismatch_still_fails_the_publish(self):
+        from unittest import mock
+        with mock.patch("filecmp.cmp", return_value=False):
+            with self.assertRaises(H.HarnessError):
+                self.h._mirror_launcher(ROOT)
 
     def test_bin_copy_resolves_old_role_names(self):
         self.h._mirror_launcher(ROOT)

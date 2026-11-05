@@ -114,7 +114,7 @@ def health(h, project=None, agent=None):
             "flagged": [{k: r[k] for k in ("id", "kind", "flag", "tokens", "gen", "project", "agent_name", "title")} for r in flagged],
             "flagged_tokens": ft, "threshold": thr, "status": "▲" if ft >= thr else "●", "generations": N,
             "projects": projects, "over": [p_["project"] for p_ in projects if p_["status"] == "▲"],
-            "approvals": _approvals(h), "corpus_index_pin": _ci_pin(h), "warnings": _cfg_warnings(h),
+            "approvals": _approvals(h), "nudge_alarms": _alarms(h), "corpus_index_pin": _ci_pin(h), "warnings": _cfg_warnings(h),
             "transcripts": _transcripts(h)}
 
 
@@ -160,6 +160,14 @@ def _approvals(h):
         return {"pending": 0, "granted": 0, "cli_tty": 0}
 
 
+def _alarms(h):
+    try:
+        import doorbell
+        return doorbell.alarm_summary(h)
+    except Exception:
+        return {}
+
+
 def k(n):
     return f"{n/1000:.1f}k" if n >= 1000 else str(n)
 
@@ -181,6 +189,10 @@ def text(d, top=8):
         L.append(f"  … +{len(d['flagged']) - top} more (dashboard /health)")
     ap = d.get("approvals") or {}
     L.append(f"approvals: {ap.get('pending', 0)} pending, {ap.get('granted', 0)} granted (cli-tty {ap.get('cli_tty', 0)})")
+    al = d.get("nudge_alarms") or {}
+    if al.get("alarms") or al.get("suppressed"):     # 0.22.0 (item 7)
+        L.append(f"▲ nudge alarms ({al['days']} d): {al['alarms']} · suppressed {al['suppressed']} · "
+                 + " · ".join(f"{r} {n}" for r, n in sorted((al.get("by_role") or {}).items(), key=lambda x: -x[1])[:5]))
     cp = d.get("corpus_index_pin") or {}
     if cp:
         L.append(("● " if cp.get("ok") else "▲ ") + cp["line"])

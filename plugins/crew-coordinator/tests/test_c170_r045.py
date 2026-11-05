@@ -27,6 +27,10 @@ class Fixture(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         cp = os.path.join(tmp, "fx")
         shutil.copytree(S.FIXTURE, cp)
+        for d_, _, fs_ in os.walk(cp):      # 0.21.2 (item 3): a frozen (0444) tree copies read-only; make the copy writable
+            os.chmod(d_, 0o755)
+            for f_ in fs_:
+                os.chmod(os.path.join(d_, f_), 0o644)
         with open(os.path.join(cp, "home", "OPERATOR.md"), "a") as f:
             f.write("tampered\n")
         open(os.path.join(cp, "home", "extra.md"), "w").close()

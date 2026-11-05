@@ -2,17 +2,23 @@
 
 Design: plans/2026-10-14_h020-doorbell-design-and-test-plan.md; spec 2026-10-15-doorbell-listen-cc0155.md v2.
 - The push is made by the SENDING chat's Claude (the server cannot call SendMessage): a send returns a `nudge`
-  object whose `line` is ids-only (no message text). Every nudge or skip is a ledger event (nudge.sent /
-  nudge.skipped {reason}).
+  object whose `line` is ids-only (no message text). Every nudge or skip is a ledger event (nudge.offered,
+  legacy nudge.sent / nudge.skipped {reason}); 0.21.1: the sender reports the outcome (nudge.result).
 - /listen is an opt-in self-wake. The OPERATOR enables roles in operator.json (never the agent-writable
   config.json). The harness decides from the ledger whether a task is open and whether to re-arm; the agent's own
   say-so is never an input. Arms expire (default 12 h, and when the agent hands off or is superseded).
 - A wake may run harness_inbox and routine coordination only; wake_guard() refuses everything gated.
 All reads scan the ledger tail (bounded by the window), so a call costs O(recent events)."""
-import time
+import json, os, re, time
 
+OFFERS = ("nudge.offered", "nudge.sent")     # 0.21.1 (A-58ff8 item 4): the server event was renamed; the old name still counts as an offer
+OUTCOMES = ("delivered", "held", "skipped", "woke")      # 0.21.2 (item 1): "woke" = the sender fired the role's wake trigger
 NUDGE_KINDS = ("task", "question", "review", "handoff", "result")   # notice / plain message start no wake
 TERMINAL = ("completed", "failed", "canceled", "rejected")
+TRIG_NOT_URGENT = "Do not skip this step because the mail is not urgent."   # 0.22.2 (A-0ce70 item 1): fixed text, never from mail
+# 0.22.2 (A-0ce70 item 3): a relaying agent's report must carry evidence in its reason: an HTTP status and a run session id. Self-reported.
+_EV_HTTP = re.compile(r"(?<![0-9A-Za-z])([1-5][0-9]{2})(?![0-9A-Za-z])")
+_EV_SESSION = re.compile(r"(?<![0-9A-Za-z_])((?:cse|session)_[0-9A-Za-z]{6,64})(?![0-9A-Za-z_])")
 WAKE_TEXT = ("/listen: run harness_inbox, answer routine coordination only (no approvals, publishes, pins or "
              "archives, corpus_index pins or other gated ops), then harness_admin op=listen args={action:rearm} "
              "and re-arm only if it says rearm=true.")
@@ -24,9 +30,12 @@ WAKE_RECORD_KINDS = ("note", "context")
 
 # 0.17.0 (R-055): caps raised for release work (W43: 123 nudges skipped on caps vs 97 sent; 91 global, 28 pair)
 DEFAULTS = {"nudge_per_agent_hour": 10, "nudge_per_pair_hour": 6, "global_per_hour": 30,
-            "interval_min": 10, "max_per_hour": 6, "expire_h": 12, "wake_window_min": 15}
+            "interval_min": 10, "max_per_hour": 6, "expire_h": 12, "wake_window_min": 15,
+            # 0.22.0 (item 7): the delivery alarm, operator.json `doorbell` only
+            "alarm_active_min": 30, "alarm_unread_min": 10, "alarm_per_role_hour": 1, "alarm_mail_after_days": 7}
 BOUNDS = {"nudge_per_agent_hour": (1, 60), "nudge_per_pair_hour": (1, 30), "global_per_hour": (1, 120),
-          "interval_min": (5, 120), "max_per_hour": (1, 12), "expire_h": (1, 48), "wake_window_min": (5, 60)}
+          "interval_min": (5, 120), "max_per_hour": (1, 12), "expire_h": (1, 48), "wake_window_min": (5, 60),
+          "alarm_active_min": (5, 240), "alarm_unread_min": (2, 120), "alarm_per_role_hour": (1, 6), "alarm_mail_after_days": (0, 30)}
 
 
 def _opcfg(h):
@@ -43,6 +52,8 @@ def _opcfg(h):
     ls = ls if isinstance(ls, dict) else {}
     for src in (db, ls):
         for k in BOUNDS:
+            if k.startswith("alarm_") and src is not db:
+                continue
             v = src.get(k)
             if isinstance(v, int) and not isinstance(v, bool) and BOUNDS[k][0] <= v <= BOUNDS[k][1]:
                 out[k] = v
@@ -74,16 +85,143 @@ def _skip(h, frm, msg, to, reason):
 
 # ---------------------------------------------------------------- nudge on send
 
-def _do_one(st, rid, a, title, line):
-    """0.21.0 (A-ae352 item 7): send only to a ListAgents row whose name EQUALS the recipient's title; none or several rows: skip (the mail
-    waits). Without a reported title (migration, old titles such as CODER never match) the match is the full harness name as a phrase and
-    the role as a word, case-insensitive, and still exactly one row."""
-    name, role = a.get("sobriquet") or rid[:8], st.role_of(rid)
-    if title:
-        return (f'Do: SendMessage to "{title}": {line} (only if ListAgents shows exactly ONE live row whose name equals this title exactly, '
-                f"checked now, not from memory; none or several: skip, the mail waits)")
-    return (f'Do: SendMessage to {name}: {line} (no chat title on record yet: only if ListAgents shows exactly ONE row whose name contains '
-            f'"{name}" as a phrase{f" and the word {role}" if role else ""}, case-insensitive; else skip, the mail waits)')
+ID_KINDS = ("task", "review", "question", "approval", "handoff")   # 0.22.0 (item 6): action kinds wake by id; results only a warm chat
+ID_WAKE_MIN, ID_COLD_S = 30, 3600
+TRIG_WAKE_MIN = 10                      # 0.21.2 (item 1): at most 1 trigger wake per role and per trigger id per 10 min, over all senders
+TRIG_RE = re.compile(r"^trig_[A-Za-z0-9]{8,64}$")
+TAIL_BYTES = 4 << 20                    # 0.21.2 (item 3): stale-id reads scan the last 4 MB of the ledger (~3,800 events at 1.1 KB each)
+
+
+def _tail(h, nbytes=TAIL_BYTES, needle=None):
+    """The ledger's last `nbytes`, parsed; a partial first line is dropped. `needle` (bytes): parse only lines that contain it, so a scan
+    for a rare event type costs a byte search, not a JSON parse per line. Never follows a symlink. -> [events], oldest first."""
+    st = h.store
+    st._refuse_symlink(st.log)
+    fd = os.open(st.log, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        start = max(0, size - int(nbytes))
+        f.seek(start)
+        raw = f.read()
+    if start:
+        cut = raw.find(b"\n")
+        raw = raw[cut + 1:] if cut >= 0 else b""
+    lines = [ln for ln in raw.split(b"\n") if ln and (needle is None or needle in ln)]
+    return [e for e in st.parse_lines(ln.decode("utf-8", "replace") for ln in lines) if e.get("type") != "_corrupt"]
+
+
+def _stale_marks(h, nbytes=TAIL_BYTES):
+    """{app session id: recipient agent id} for ids a sender reported stale (nudge.stale_id) with no nudge.stale_cleared after it, replayed
+    in ledger order over the bounded tail (item 3). The ledger is the only source (item 2): no state file holds a mark, so two chats writing
+    at once cannot drop a clear. A mark older than the tail is forgotten; the worst case is one more failed send, which marks it again."""
+    out = {}
+    for e in _tail(h, nbytes, b"nudge.stale_"):
+        t, d = e.get("type"), e.get("data") or {}
+        hid = d.get("host_session_id")
+        if t == "nudge.stale_id" and hid:
+            out[hid] = d.get("to")
+        elif t == "nudge.stale_cleared":
+            out.pop(hid, None)
+    return out
+
+
+def _wake_trigger(st, role):
+    """The role's wake trigger id from the latest operator-approved wake.pinned event (harness_admin op=wake_pin), or None. The wake.json
+    file is never read here (critic B1: any local agent can write it); an edit counts only after the operator pins it again. The format is
+    checked again on read."""
+    pin = getattr(st, "wake_pin", None) or {}
+    ent = pin.get("entries") if isinstance(pin, dict) else None
+    v = ent.get(role) if isinstance(ent, dict) and role else None
+    return v if isinstance(v, str) and TRIG_RE.match(v) else None
+
+
+def _stale_ids(h):
+    """App session ids still marked stale (see _stale_marks)."""
+    return set(_stale_marks(h))
+
+
+def _id_for(st, rid, kind):
+    """The recipient's app session id, from the holder's own register, restore or sync record (H1 own-agent guard). Action kinds and
+    results only; whether a result may use it is decided in _pick_id (warm recipients only)."""
+    a = st.agents.get(rid) or {}
+    hid = a.get("host_session_id")
+    if kind in ID_KINDS + ("result",) and isinstance(hid, str) and hid.startswith("local_") and len(hid) < 80 and hid.replace("_", "").replace("-", "").isalnum():
+        return hid
+    return None
+
+
+def _same_machine(a, st=None):
+    """0.22.0 (item 6, critic m-00ea2ad60bc4): a session id only reaches a chat on the sender's machine. 0.22.1 (envoy m-ea0c30970c55):
+    the machine is the stable machine id, never the hostname (it changes with the network). A-4d611: this side's id unreadable means
+    mail only; a holder record with an id must match it; a record from before 0.22.1 (no id) matches only through a host name this
+    machine itself registered or synced under (learned from the ledger), else mail only until the holder next registers, restores or
+    syncs."""
+    import harness as H
+    mine, theirs = H.machine_id(), a.get("machine")
+    if not mine:
+        return False                                  # A-4d611: an unreadable id fails safe (mail only, no alarm)
+    if theirs:
+        return theirs == mine
+    aliases = set((getattr(st, "machine_hosts", None) or {}).get(mine) or ()) | {H.HOSTNAME}
+    return H.norm_host(a.get("host")) in aliases      # a record from before 0.22.1: only a host name this machine used counts
+
+
+def _route(h, st, rid, a, kind, now):
+    """0.22.0 (item 6, D-3e5e7): the ROLE is the address and the harness resolves it; the only thing a sender ever gets is the holder's
+    own app session id. -> (hid or None, mail-only reason or None)."""
+    if not st.role_of(rid):
+        return None, "no role: mail only"
+    if not (a.get("host_session_id") or "").startswith("local_"):
+        return None, "no app session id: mail only"
+    if not _same_machine(a, st):
+        return None, "holder on another machine: mail only"
+    hid = _pick_id(h, st, rid, kind, now)
+    if hid:
+        return hid, None
+    if kind == "result":
+        return None, "result to a cold holder: mail only"
+    return None, "id route closed by a stale mark or the cold-wake cap: mail only"
+
+
+def _do_one(hid, trig, line, mid):
+    """0.22.0 (item 6): one exact address, no name, no title, no ListAgents row check. -> the Do-line text, or None (mail only)."""
+    rep = f' harness_admin op=nudge_result args={{msg_id:"{mid}",outcome:delivered|held|skipped,reason}}.'
+    parts = []
+    if hid:
+        parts.append(f'Do: SendMessage to {hid}: {line} (fixed fields only, no subject or body). If the send fails (stale, archived or deleted '
+                     f'session) do not retry it: report skipped with reason stale_id; the mail waits. No SendMessage tool here (a Cowork or '
+                     f'cloud chat): report skipped with reason no_sendmessage.'
+                     + (' If it did not deliver, run the RemoteTrigger step next, then report once:' if trig else ' Then report:') + rep)
+    if trig:
+        parts.append(f'Do: RemoteTrigger action=run trigger_id={trig} ('
+                     + ('only if the SendMessage step above did not deliver or the session holds it; ' if hid else '')
+                     + 'load the tool with ToolSearch select:RemoteTrigger if it is deferred; it runs under the Claude subscription, never '
+                     'with an API key; no other trigger tool). ' + TRIG_NOT_URGENT + ' Then report outcome woke'
+                     + (' instead of skipped.' if hid else ':' + rep)
+                     + ' No RemoteTrigger tool here: skip that step with reason no_remotetrigger.')
+    return " ; ".join(parts) or None
+
+
+def _pick_id(h, st, rid, kind, now):
+    """Session-id route. The id comes only from the holder's own record. A COLD recipient (its last harness call over 1 h ago, or none):
+    action kinds get at most 1 id wake per 30 min summed over ALL senders (nudge.idwake, counted apart from offers); a result never wakes
+    a cold chat (0.22.0 item 6). A warm one costs no extra read."""
+    hid = _id_for(st, rid, kind)
+    if not hid or hid in _stale_ids(h):
+        return None
+    last = _load(_sp(h, rid)).get("last_call")
+    if last and now - float(last) <= ID_COLD_S:
+        return hid
+    if kind == "result":
+        return None
+    if any(rid in (e["data"].get("to") or []) for e in _recent(h, now - ID_WAKE_MIN * 60, ("nudge.idwake",))):
+        return None
+    try:
+        h.store.append("nudge.idwake", "system", {"to": [rid], "host_session_id": hid})
+    except Exception:
+        return None
+    return hid
+
 
 def attach_nudge(h, sender_ref, result):
     """Add `nudge` (and `skipped`) to a send result. Never raises; a failure leaves the result as it was."""
@@ -91,6 +229,30 @@ def attach_nudge(h, sender_ref, result):
         return _attach(h, sender_ref, result)
     except Exception:
         return result
+
+
+def _pick_trig(h, st, rid, mid, now):
+    """0.21.2 (item 1): a role with a pinned `trig_...` wake trigger gets a RemoteTrigger Do-line, at most once per role AND once per trigger
+    id per 10 min summed over all senders (critic B2: roles pointed at one routine share its slot). Event nudge.trigwake, counted apart
+    from offers and written when OFFERED, since the harness cannot see whether the sender fired it; a sender reporting `delivered` (the
+    SendMessage step rang, so no trigger ran) frees the slot (nudge.trigwake_released). Only reached after every existing cap passed."""
+    role = st.role_of(rid)
+    trig = _wake_trigger(st, role)
+    if not trig:
+        return None
+    since = now - TRIG_WAKE_MIN * 60
+    evs = _tail(h, needle=b"nudge.trigwake")
+    freed = {(e.get("data") or {}).get("msg_id") for e in evs if e.get("type") == "nudge.trigwake_released"}
+    for e in evs:
+        d = e.get("data") or {}
+        if e.get("type") == "nudge.trigwake" and (e.get("t") or 0) >= since and d.get("msg_id") not in freed \
+                and (d.get("role") == role or d.get("trigger") == trig):
+            return None
+    try:
+        h.store.append("nudge.trigwake", "system", {"role": role, "to": [rid], "msg_id": mid, "trigger": trig})
+    except Exception:
+        return None
+    return trig
 
 
 def _attach(h, sender_ref, r):
@@ -106,9 +268,9 @@ def _attach(h, sender_ref, r):
     sender = m["from"]
     cfg = _opcfg(h)
     now = time.time()
-    hour = _recent(h, now - 3600, ("nudge.sent", "nudge.skipped"))
-    sent = [e for e in hour if e["type"] == "nudge.sent"]
-    seen_msg = {e["data"].get("msg") for e in _recent(h, now - 86400, ("nudge.sent",))}
+    hour = _recent(h, now - 3600, OFFERS + ("nudge.skipped",))
+    sent = [e for e in hour if e["type"] in OFFERS]
+    seen_msg = {e["data"].get("msg") or e["data"].get("msg_id") for e in _recent(h, now - 86400, OFFERS)}
     targets, skipped = [], []
     cand = list(m.get("to_resolved") or [])
     for tgt in m.get("to") or []:    # a role target resolves to its live holder now; groups and broadcasts never nudge
@@ -145,19 +307,204 @@ def _attach(h, sender_ref, r):
         out["nudge_skipped"] = skipped
     if not targets:
         return out
-    sname = (st.agents.get(sender) or {}).get("sobriquet") or sender[:8]
     srole = st.role_of(sender)
-    line = (f"Mail {mid} from {srole or sname}, thread {m['thread']}. Run harness_inbox (CLI: harness.py inbox --agent "
+    line = (f"Mail {mid} from {srole or 'agent ' + sender[:8]}, thread {m['thread']}. Run harness_inbox (CLI: harness.py inbox --agent "
             f"<your id> --peek), reply with send reply_to {mid}.")
-    ids = [rid for rid, _ in targets]
-    titles = [st.title_of(rid) for rid, _ in targets]
-    h.store.append("nudge.sent", "system", {"msg": mid, "from": sender, "to": ids, "thread": m["thread"],
-                                            "titled": [bool(t) for t in titles]})     # 0.21.0 (R5): how many nudges still run on the migration path
+    ring, mail_only = [], []
+    for rid, a in targets:
+        hid, why = _route(h, st, rid, a, m["kind"], now)
+        trig = _pick_trig(h, st, rid, mid, now)
+        if hid or trig:
+            ring.append((rid, a, hid, trig))
+        else:
+            mail_only.append({"to": st.name_role(rid), "reason": why})
+    if mail_only:
+        out["nudge_mail_only"] = mail_only
+    if not ring:
+        out["nudge"] = "none (" + "; ".join(sorted({x["reason"].replace(": mail only", "") for x in mail_only})) + ": mail only)"
+        return out
+    ids = [rid for rid, _, _, _ in ring]
+    h.store.append("nudge.offered", "system", {"msg": mid, "msg_id": mid, "from": sender, "to": ids, "thread": m["thread"],
+                                               "roles": [st.role_of(rid) or None for rid in ids],
+                                               "by_id": [bool(x) for _, _, x, _ in ring], "hids": [x for _, _, x, _ in ring],
+                                               "by_trigger": [bool(g) for _, _, _, g in ring]})
+    try:
+        note_offer(h, sender, mid, now)       # the sender must report the outcome (op=nudge_result)
+    except Exception:
+        pass
     n_hour = sum(1 for e in sent if e["data"].get("from") == sender) + 1
-    out["nudge"] = {"line": line, "to": [st.name_role(rid) for rid, _ in targets], "titles": titles, "msg_id": mid, "thread": m["thread"],
+    out["nudge"] = {"line": line, "to": [st.name_role(rid) for rid in ids], "msg_id": mid, "thread": m["thread"],
                     "cap_state": f"{n_hour}/{cfg['nudge_per_agent_hour']} this hour",
-                    "do": " ; ".join(_do_one(st, rid, a, t, line) for (rid, a), t in zip(targets, titles))}
+                    "do": " ; ".join(_do_one(x, g, line, mid) for _, _, x, g in ring)}
     return out
+
+
+# ---------------------------------------------------------------- visible outcomes (0.21.1, item 4)
+# The harness only OFFERS a nudge (nudge.offered); only the sender knows whether it rang. The sender reports op=nudge_result. A small per-agent
+# state file (derived; the ledger is the truth) keeps the time of the agent's last harness call and its offers that still await an outcome.
+# An offer becomes nudge.unreported only when it is older than the sender's PREVIOUS call and still has no result, so a result in the very next
+# call (the inbox call right after the send) always counts.
+
+def _sp(h, aid):
+    return os.path.join(h.store.dir, "nudge_state", str(aid)[:64] + ".json")
+
+
+def _load(p):
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save(p, d):
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = "%s.%d.tmp" % (p, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f)
+    os.replace(tmp, p)
+
+
+def note_offer(h, sender, mid, t):
+    p = _sp(h, sender)
+    d = _load(p)
+    pend = d.setdefault("pending", {})
+    pend[mid] = round(float(t), 3)
+    for k in sorted(pend, key=pend.get)[:-200]:         # bounded
+        pend.pop(k, None)
+    _save(p, d)
+
+
+def settle(h, aid, now=None):
+    """Called at the start of each of an agent's harness calls (except the nudge_result call itself). Writes nudge.unreported for the agent's
+    offers that are older than its previous call and still have no result; then records this call's time. Never raises. -> [msg ids]."""
+    out = []
+    try:
+        now = float(now if now is not None else time.time())
+        p = _sp(h, aid)
+        d = _load(p)
+        prev = d.get("last_call")
+        pend = d.get("pending") or {}
+        if prev:
+            for mid, t in list(pend.items()):
+                if float(t) < float(prev):
+                    h.store.append("nudge.unreported", "system", {"msg": mid, "msg_id": mid, "by": aid, "offered_t": t})
+                    out.append(mid)
+                    pend.pop(mid, None)
+        d["pending"] = pend
+        d["last_call"] = round(now, 3)
+        d.pop("stale_hids", None)                   # 0.21.1 field, unused since 0.21.2 (item 2)
+        _save(p, d)
+        # 0.21.2 (item 2): the clear comes from the ledger only. A call from a session marked stale proves it live: clear its mark for every
+        # sender. With no host session id in the env (CLI, another machine), the agent clears marks naming it (known issue, 0.21.1).
+        cur = os.environ.get("CLAUDE_CODE_HOST_SESSION_ID") or ""
+        for hid, to in _stale_marks(h).items():
+            if (cur and cur == hid) or (not cur and to == aid):
+                h.store.append("nudge.stale_cleared", "system", {"agent": aid, "host_session_id": hid})
+        alarm_scan(h, now)                          # 0.22.0 (item 7): at most once a minute, inside the call the agent already makes
+    except Exception:
+        pass
+    return out
+
+
+class _Already(Exception):
+    pass
+
+
+def relay_evidence(reason):
+    """0.22.2 (A-0ce70 item 3): the evidence a relaying (non-sender) reporter must give in its reason: a run session id (cse_... or
+    session_...) and a 3-digit HTTP status. Self-reported: the harness checks the shape, not the run. -> {"http", "session"} or None."""
+    s = str(reason or "")
+    m = _EV_SESSION.search(s)
+    if not m:
+        return None
+    rest = s[:m.start()] + " " + s[m.end():]      # a status is never read from inside the session id
+    st = _EV_HTTP.search(rest)
+    if not st:
+        return None
+    return {"http": st.group(1), "session": m.group(1)}
+
+
+def record_result(h, caller, msg_id, outcome, reason=None):
+    """harness_admin op=nudge_result {msg_id, outcome: delivered|held|skipped (woke accepted), reason}. A skipped result whose reason starts
+    stale_id marks the offer's app session ids stale (nudge.stale_id) until the recipient next calls the harness from that session. The sender
+    of the offered mail may report; 0.22.2 (A-0ce70 item 3): so may a relaying agent whose reason carries evidence (relay_evidence), recorded
+    with `by` (reporter) and `for` (the offer's sender) and `evidence` marked self-reported. One result per message (a second call answers
+    already_reported). A result counts even after the offer was flagged unreported."""
+    import harness as H
+    msg_id = str(msg_id or "").strip()
+    if outcome not in OUTCOMES:
+        raise H.HarnessError("outcome must be one of " + ", ".join(OUTCOMES))
+    st = h.state()
+    offer = None
+    for e in reversed(h.store.read_all()[-6000:]):
+        if e.get("type") in OFFERS and (e.get("data") or {}).get("msg") == msg_id or (e.get("type") in OFFERS and (e.get("data") or {}).get("msg_id") == msg_id):
+            offer = e["data"]
+            break
+    if not offer:
+        raise H.HarnessError("no nudge was offered for %s" % msg_id)
+    mine = set(st.lineage(caller)) | {caller}
+    why = " ".join(str(reason or "").replace("\x00", " ").split())[:80]
+    ev = None
+    if offer.get("from") not in mine:
+        ev = relay_evidence(why)      # 0.22.2 (A-0ce70 item 3): a relaying agent may report, only with evidence
+        if not ev:
+            raise H.HarnessError("only the sender of %s can report its nudge" % msg_id)
+    data = {"msg": msg_id, "msg_id": msg_id, "by": caller, "for": offer.get("from"), "outcome": outcome, "reason": why}
+    if ev:
+        data["evidence"] = dict(ev, self_reported=True)
+
+    def _fresh(store):
+        for e in store.read_all()[-3000:]:
+            if e.get("type") == "nudge.result" and ((e.get("data") or {}).get("msg_id") == msg_id):
+                raise _Already()
+    try:
+        h.store.append("nudge.result", caller, data, precheck=_fresh)
+    except _Already:
+        return {"msg_id": msg_id, "already_reported": True}
+    if outcome == "delivered" and any(offer.get("by_trigger") or []):
+        try:    # 0.21.2 (item 1): the SendMessage step rang, so no trigger ran: free the wake slot (no extra round trip, this is the report)
+            h.store.append("nudge.trigwake_released", "system", {"msg_id": msg_id})
+        except Exception:
+            pass
+    if outcome == "skipped" and why.lower().startswith("stale_id"):
+        for to, hid in zip(offer.get("to") or [], offer.get("hids") or []):
+            if hid:
+                try:
+                    h.store.append("nudge.stale_id", caller, {"msg_id": msg_id, "to": to, "host_session_id": hid})   # settle clears it
+                except Exception:
+                    pass
+    try:
+        p = _sp(h, offer.get("from"))
+        d = _load(p)
+        if msg_id in (d.get("pending") or {}):
+            d["pending"].pop(msg_id, None)
+            _save(p, d)
+    except Exception:
+        pass
+    return {"msg_id": msg_id, "reported": True, "outcome": outcome}
+
+
+def outcomes(events):
+    """Counts for the weekly report and R5 from a list of ledger events: offers, the sender's reported outcomes, and offers with NO result,
+    split in two (critic): PENDING = the sender has made no later call yet, UNREPORTED = a later call came and still no result. A result
+    always wins over an unreported flag. -> dict"""
+    offers, results, unrep = {}, {}, set()
+    for e in events:
+        t, d = e.get("type"), e.get("data") or {}
+        k = d.get("msg_id") or d.get("msg")
+        if t in OFFERS and k:
+            offers[k] = d
+        elif t == "nudge.result" and k:
+            results[k] = d.get("outcome")
+        elif t == "nudge.unreported" and k:
+            unrep.add(k)
+    by = {o: sum(1 for k, v in results.items() if v == o and k in offers) for o in OUTCOMES}
+    no_result = [k for k in offers if k not in results]
+    flagged = [k for k in no_result if k in unrep]
+    return {"offered": len(offers), "delivered": by["delivered"], "woke": by["woke"], "held": by["held"], "skipped_by_sender": by["skipped"],
+            "pending": len(no_result) - len(flagged), "unreported": len(flagged)}
 
 
 # ---------------------------------------------------------------- /listen
@@ -278,7 +625,7 @@ def listen(h, agent, action="status"):
         raise HE(f"listen: not enabled for role {role or '(none)'}; only the operator enables it (operator.json listen.roles)")
     n_open, ids = open_task(st, aid)
     role_wakes = sum(1 for e in _recent(h, now - 3600, ("listen.wake",)) if e["data"].get("role") == role)
-    glob = len(_recent(h, now - 3600, ("nudge.sent", "listen.wake")))
+    glob = len(_recent(h, now - 3600, OFFERS + ("listen.wake",)))
     if action == "wake":
         if not mine:
             _skip(h, aid, None, [aid], "wake without a live arm")
@@ -348,3 +695,142 @@ def wake_guard(h, tool, args):
         import harness as H
         raise H.HarnessError(f"{tool}: refused during a /listen wake (inbox and routine coordination only); "
                              "the operator or a normal session runs gated and file-changing work")
+
+
+# ---------------------------------------------------------------- delivery alarm (0.22.0, item 7; addendum v2.1, D-3e5e7)
+# A nudge that could ring (its offer carried an id Do-line for that recipient) to an ACTIVE holder either goes unread past
+# alarm_unread_min (A1) or comes back skipped for a reason that is not a cap, or unreported (A2): write nudge.alarm. Deterministic, 0 tokens.
+
+ALARM_SCAN_EVERY_S = 60
+
+
+def _is_cap(reason):
+    r = str(reason or "").lower()
+    return "cap" in r or r.startswith(("doorbell off", "already nudged")) or "muted" in r
+
+
+def _last_activity(h, st, rid):
+    """The holder's last harness call (settle's record); its ledger last_seen only when no call is on record yet."""
+    lc = _load(_sp(h, rid)).get("last_call")
+    if lc:
+        return float(lc)
+    ls = (st.agents.get(rid) or {}).get("last_seen")
+    return float(ls) if ls else None
+
+
+def alarm_scan(h, now=None, force=False):
+    """Scan the ledger tail (last 24 h of offers) and write nudge.alarm per the rules above. At most once a minute unless force=True.
+    Never raises. -> [alarm data dicts written]"""
+    out = []
+    try:
+        now = float(now if now is not None else time.time())
+        sp = os.path.join(h.store.dir, "nudge_state", "_alarm_scan.json")
+        stamp = _load(sp)
+        if not force and now - float(stamp.get("last") or 0) < ALARM_SCAN_EVERY_S:
+            return out
+        stamp["last"] = round(now, 3)
+        _save(sp, stamp)
+        cfg = _opcfg(h)
+        st = h.state()
+        evs = [e for e in _tail(h, needle=b'"nudge.') if e.get("type") in ("nudge.offered", "nudge.result", "nudge.unreported", "nudge.alarm", "nudge.alarm_armed")]
+        if not any(e["type"] == "nudge.offered" and any((e.get("data") or {}).get("by_id") or []) and float(e.get("t") or 0) >= now - 86400
+                   for e in evs):
+            return out                               # nothing could alarm: write nothing (a read-only call stays read-only)
+        armed = next((e for e in evs if e["type"] == "nudge.alarm_armed"), None) or stamp.get("armed")
+        if not armed:
+            ev = h.store.append("nudge.alarm_armed", "system", {"t": round(now, 3)})
+            stamp["armed"] = {"t": ev.get("t", now)}
+            armed = stamp["armed"]
+        armed_t = float((armed.get("data") or {}).get("t") or armed.get("t") or now) if isinstance(armed, dict) else now
+        alarmed = {(e.get("data") or {}).get("msg_id") for e in evs if e["type"] == "nudge.alarm"}
+        results = {(e.get("data") or {}).get("msg_id"): e.get("data") or {} for e in evs if e["type"] == "nudge.result"}
+        unrep = {(e.get("data") or {}).get("msg_id") for e in evs if e["type"] == "nudge.unreported"}
+        role_hour = {}
+        for e in evs:
+            if e["type"] == "nudge.alarm" and float(e.get("t") or 0) >= now - 3600:
+                r_ = (e.get("data") or {}).get("role")
+                role_hour[r_] = role_hour.get(r_, 0) + 1
+        sup = stamp.setdefault("suppressed", {})
+        sup_seen = set(stamp.setdefault("suppressed_mids", []))
+        act, unread_s = cfg["alarm_active_min"] * 60, cfg["alarm_unread_min"] * 60
+        for e in evs:
+            if e["type"] != "nudge.offered" or float(e.get("t") or 0) < now - 86400:
+                continue
+            d = e.get("data") or {}
+            mid, sent_t = d.get("msg_id") or d.get("msg"), float(e.get("t") or 0)
+            if not mid or mid in alarmed:
+                continue
+            m = st.messages.get(mid) or {}
+            for i, rid in enumerate(d.get("to") or []):
+                if not (d.get("by_id") or [])[i:i + 1] or not d["by_id"][i]:
+                    continue                                 # A1 and A2 apply only when an id Do-line was offered (critic m-fcb579e7e932)
+                a = st.agents.get(rid) or {}
+                if not (a.get("host_session_id") or "").startswith("local_"):
+                    continue
+                last = _last_activity(h, st, rid)
+                if last is None or not (now - last <= act or abs(last - sent_t) <= act):
+                    continue                                 # not active at send time or at scan time
+                role = (d.get("roles") or [None] * (i + 1))[i] or st.role_of(rid)
+                res = results.get(mid) or {}
+                cond = reason = None
+                if res.get("outcome") == "skipped" and not _is_cap(res.get("reason")):
+                    cond, reason = "skipped", res.get("reason") or ""
+                elif mid in unrep and not res:
+                    cond, reason = "unreported", "the sender made a later call and never reported"
+                elif rid not in (m.get("read_by") or []) and now - sent_t >= unread_s:   # A1: whatever the sender reported
+                    cond, reason = "unread", f"unread after {int((now - sent_t) // 60)} min"
+                if not cond:
+                    continue
+                if role_hour.get(role, 0) >= cfg["alarm_per_role_hour"]:
+                    if mid not in sup_seen:
+                        sup[role] = sup.get(role, 0) + 1
+                        sup_seen.add(mid)
+                    continue
+                data = {"msg_id": mid, "role": role, "to": rid, "from": d.get("from"), "cond": cond, "reason": str(reason)[:120],
+                        "age_min": int((now - sent_t) // 60), "suppressed": sup.pop(role, 0)}
+                h.store.append("nudge.alarm", "system", data)
+                alarmed.add(mid)
+                role_hour[role] = role_hour.get(role, 0) + 1
+                out.append(data)
+                if now - armed_t >= cfg["alarm_mail_after_days"] * 86400:
+                    try:    # ids only, never subject or body text of the message
+                        h.send("operator", ["role:envoy"], f"nudge.alarm {mid} role {role} cond {cond} age {data['age_min']} min",
+                               subject="nudge alarm", kind="notice")
+                    except Exception:
+                        pass
+                break
+        stamp["suppressed_mids"] = sorted(sup_seen)[-500:]
+        _save(sp, stamp)
+    except Exception:
+        pass
+    return out
+
+
+def alarm_lines(h, st, aid):
+    """Sync 'Changed' lines: alarms in the last 24 h for this agent whose message it still has not read."""
+    out = []
+    try:
+        for e in _tail(h, needle=b"nudge.alarm"):
+            d = e.get("data") or {}
+            if e.get("type") == "nudge.alarm" and d.get("to") == aid and float(e.get("t") or 0) >= time.time() - 86400:
+                m = st.messages.get(d.get("msg_id")) or {}
+                if aid not in (m.get("read_by") or []):
+                    out.append(f"⚠ nudge alarm: {d.get('msg_id')} ({d.get('cond')}) is waiting: harness_inbox")
+    except Exception:
+        pass
+    return out[:5]
+
+
+def alarm_summary(h, days=7):
+    """For the health report: alarm counts per role over `days`, and the suppressed hits summed per role."""
+    since = time.time() - days * 86400
+    by, sup = {}, {}
+    try:
+        for e in _tail(h, needle=b"nudge.alarm"):
+            d = e.get("data") or {}
+            if e.get("type") == "nudge.alarm" and float(e.get("t") or 0) >= since:
+                by[d.get("role")] = by.get(d.get("role"), 0) + 1
+                sup[d.get("role")] = sup.get(d.get("role"), 0) + int(d.get("suppressed") or 0)
+    except Exception:
+        pass
+    return {"days": days, "alarms": sum(by.values()), "by_role": by, "suppressed": sum(sup.values()), "suppressed_by_role": sup}

@@ -22,8 +22,8 @@ S, I, B, ARR = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}, {"t
 # dedicated tools and everything else goes through one `harness_admin` op tool.
 # Rules and patterns live in the protocol skill, loaded only when needed.
 ADMIN_OPS = ["whoami", "ledger", "thread", "status", "set_expertise", "task_update", "group", "retire",
-             "set_project", "roster", "role_define", "role_assign", "release_scope", "registry", "verify", "export", "reload", "health", "archive", "unarchive", "pin",
-             "approvals", "flag_release", "publish_release", "pin_corpus_index", "retag", "listen", "vault_write", "operator_script", "hatstand_sync", "lesson_curate", "concept_link", "concept_unlink", "recall_report", "notify_sent", "approvals_pending", "session_titled", "notify_undelivered"]
+             "set_project", "roster", "role_define", "role_assign", "release_scope", "wake_pin", "registry", "verify", "export", "reload", "health", "archive", "unarchive", "pin",
+             "approvals", "flag_release", "publish_release", "pin_corpus_index", "retag", "listen", "vault_write", "operator_script", "hatstand_sync", "lesson_curate", "concept_link", "concept_unlink", "recall_report", "notify_sent", "approvals_pending", "session_titled", "notify_undelivered", "nudge_result", "drift_explain"]
 # 0.12.1 (C-01dcf): allowed args per admin op; unknown keys are an error, never silently ignored.
 ADMIN_ARGS = {
     "whoami": set(), "ledger": {"active_only"}, "thread": {"thread"}, "status": {"path"},
@@ -41,6 +41,8 @@ ADMIN_ARGS = {
     "idle_wake": {"project", "on"},
     "pin_corpus_index": {"sha", "rules", "ref"},
     "release_scope": {"plugin", "version", "items", "rationale", "approval_ref"},
+    "wake_pin": set(),
+    "drift_explain": {"code_sha", "reason"},
     "retag": {"entry", "project", "role", "ref", "dry_run"},
     "listen": {"action"},
     "vault_write": {"dry_run"},
@@ -49,7 +51,7 @@ ADMIN_ARGS = {
     "approvals": {"all"}, "lesson_curate": {"ids", "keys"},
     "concept_link": {"entry", "concept", "role"}, "concept_unlink": {"entry", "concept"},
     "recall_report": {"weeks"},
-    "notify_sent": {"id"}, "approvals_pending": set(), "session_titled": {"title", "status"}, "notify_undelivered": set(),
+    "notify_sent": {"id"}, "approvals_pending": set(), "session_titled": {"title", "status"}, "notify_undelivered": set(), "nudge_result": {"msg_id", "outcome", "reason"},
     "flag_release": {"name", "retired", "replaced_by", "external"},
     "publish_release": {"path", "notes", "required", "renamed_from", "pkg", "accept", "override", "build", "dry_run"},
 }
@@ -347,6 +349,11 @@ def admin(h, a):
         return h.session_titled(caller_id(h, ag), x.get("title"), x.get("status"))
     if op == "approvals_pending":   # 0.21.0 (A-ae352 item 3): read-only, no args, no digest, no ledger write
         return h.approvals_pending()
+    if op == "nudge_result":   # 0.21.1 (A-58ff8 item 4): the sender reports whether the nudge rang
+        import doorbell
+        res = doorbell.record_result(h, caller_id(h, ag), x.get("msg_id"), x.get("outcome"), x.get("reason"))
+        doorbell.settle(h, caller_id(h, ag))
+        return res
     if op == "notify_undelivered":   # 0.21.0 (critic D2): the cloud fallback's reader for the secretary digest; read-only, each notify id once
         import notify
         rows = notify.undelivered(h)
@@ -406,6 +413,12 @@ def admin(h, a):
                 raise H.HarnessError(f"release_scope: {k} required")
         return pend(h, h.resolve(h.state(), ag, follow=False), "release_scope",
                     {k: x.get(k) for k in ("plugin", "version", "items", "rationale", "approval_ref") if x.get(k) is not None})
+    if op == "drift_explain":   # 0.22.0 (gate spec D): the curator or envoy explains an unknown installed code sha
+        return h.drift_explain(caller_id(h, ag), x.get("code_sha"), x.get("reason"))
+    if op == "wake_pin":   # 0.21.2 (item 1, critic B1): snapshot wake.json into an approval; only the operator's grant writes wake.pinned
+        entries, ignored = h.wake_entries_from_file()
+        r = pend(h, h.resolve(h.state(), ag, follow=False), "wake_pin", {"entries": entries})
+        return dict(r, entries=entries, ignored=ignored) if isinstance(r, dict) else r
     if op == "pin_corpus_index":   # 0.15.1 (P3): envoy role direct, anyone else an approval request
         st = h.state()
         cid = h.resolve(st, ag, follow=False)
@@ -631,6 +644,11 @@ def _call(h, name, a):
     bind_check(h, a, name)
     import doorbell
     doorbell.wake_guard(h, name, a)     # 0.15.5 (WP4): inside a /listen wake only inbox and routine coordination run
+    if a.get("agent") and not (name == "harness_admin" and a.get("op") == "nudge_result"):
+        try:    # 0.21.1 (A-58ff8 item 4): offers older than the sender's PREVIOUS call with no result become nudge.unreported
+            doorbell.settle(h, h.resolve(h.state(), a["agent"], follow=False))
+        except Exception:
+            pass
     if name == "harness_admin":
         return admin(h, a)
     if name in ("harness_task_update", "harness_retire", "harness_export"):   # legacy names go through the same gates
@@ -782,6 +800,10 @@ def main():
             "host": H.HOSTNAME, "pid": os.getpid(), "version": H.VERSION,
             "code": (H.RUNNING_CODE_SHA or "")[:12], "home": h.home, "plugin_root": H.PLUGIN_ROOT,
             "platform": sys.platform})
+        try:    # 0.22.0 (gate spec D): once per process start, never per sync
+            h.drift_check()
+        except Exception:
+            pass
     except Exception as e:  # keep serving so the agent sees a clear error instead of a dead server
         h, home_error = None, str(e)
     out = sys.stdout

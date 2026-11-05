@@ -111,6 +111,16 @@ def main():
             return 0
         ent, by_host = retired_entry(load(home), inp.get("session_id"), os.environ.get("CLAUDE_CODE_HOST_SESSION_ID"))
         if not ent or allowed(inp.get("tool_name"), inp.get("tool_input")) or (by_host and host_exempt(inp.get("tool_name"))):
+            why = None
+            try:    # 0.22.0 (release gate H1, H2): same process, no harness.py import
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import release_guard
+                why = release_guard.pre_check(inp, home)
+            except Exception as e:
+                log(f"release_guard error: {type(e).__name__}: {e}")
+            if why:
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                         "permissionDecisionReason": why}}))
             return 0
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": reason(ent)}}))

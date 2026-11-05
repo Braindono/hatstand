@@ -61,7 +61,8 @@ class Weekly(unittest.TestCase):
         md, js, r = self.run_report()
         self.assertEqual(tree_digest(self.home), before)
         L = r["ledger"]
-        self.assertEqual((L["nudges"]["sent"], L["nudges"]["skipped"], L["nudges"]["cap_hits"]), (1, 2, 2))
+        self.assertEqual((L["nudges"]["offered"], L["nudges"]["skipped"], L["nudges"]["cap_hits"]), (1, 2, 2))      # 0.21.1: the old nudge.sent still counts as an offer
+        self.assertEqual((L["nudges"]["delivered"], L["nudges"]["pending"], L["nudges"]["unreported"]), (0, 1, 0))     # an offer with no result is pending, not delivered
         self.assertEqual(L["nudges"]["skipped_by_reason"], {"global cap": 1, "pair cap": 1})
         self.assertEqual((L["gates"]["failed_calls"], L["gates"]["failed_gate_like"], L["gates"]["denied"]), (2, 1, 1))
         self.assertEqual(L["gates"]["release_gate_overrides"][0]["reason"], "operator skip")
@@ -97,7 +98,7 @@ class Weekly(unittest.TestCase):
         md, _, _ = self.run_report(now=dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1))   # next day: a new file
         page = open(md).read()
         self.assertIn("compared with", page)
-        self.assertIn("sent 2 (+1)", page)
+        self.assertIn("offered 2 (+1)", page)
 
     def test_missing_indexer_and_trend_are_reported_not_fatal(self):
         md, _, r = W.report(self.home, self.out, trend_path=os.path.join(self.tmp, "none.jsonl"),

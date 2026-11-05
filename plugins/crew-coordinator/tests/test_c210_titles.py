@@ -142,35 +142,35 @@ class Item6NameRole(Base):
 
 
 class Item7Nudge(Base):
-    def test_nudge_names_the_recipient_with_role_and_carries_the_exact_title_when_known(self):
-        t = self.title(self.envoy)
-        self.call("harness_admin", op="session_titled", agent=self.envoy, args={"title": t, "status": "done"})
-        r = self.call("harness_send", agent=self.plain, to=self.envoy[:8], body="please look", subject="s", kind="task")
-        n = r["nudge"]
-        self.assertEqual(n["to"], ["%s (envoy)" % self.name(self.envoy)])
-        self.assertEqual(n["titles"], [t])
-        self.assertIn('Do: SendMessage to "%s"' % t, n["do"])
-        self.assertIn("exactly ONE live row whose name equals this title exactly", n["do"])
-        self.assertIn("checked now, not from memory", n["do"])
-        self.assertIn("skip, the mail waits", n["do"])
-        self.assertEqual(self.events("nudge.sent")[-1]["data"]["titled"], [True])
+    """0.22.0 (item 6, D-3e5e7): the ROLE is the address and the holder's own app session id is the only thing a sender gets. A chat
+    title, reported or not, changes nothing (these tests replace the 0.21.1 title and fallback-row rules)."""
+    def holder(self, role, hid):
+        a = self.h.register(project="harness-ops", model=MODEL, task="x", role=role, host_session_id=hid)["id"]
+        import doorbell as D
+        D.settle(self.h, a)                                  # warm: a result may use the id
+        return a
 
-    def test_without_a_title_the_migration_rule_applies_and_never_trusts_an_old_name(self):
-        r = self.call("harness_send", agent=self.plain, to=self.envoy[:8], body="please look", subject="s", kind="task")
-        n = r["nudge"]
-        self.assertEqual(n["titles"], [None])
-        self.assertIn("no chat title on record yet", n["do"])
-        self.assertIn('contains "%s" as a phrase and the word envoy' % self.name(self.envoy), n["do"])
-        self.assertIn("exactly ONE row", n["do"])
-        self.assertIn("case-insensitive", n["do"])
-        self.assertEqual(self.events("nudge.sent")[-1]["data"]["titled"], [False])
+    def test_a_title_never_changes_the_address(self):
+        e = self.holder("envoy", "local_env1")
+        self.call("harness_admin", op="session_titled", agent=e, args={"title": self.title(e), "status": "done"})
+        n = self.call("harness_send", agent=self.plain, to="role:envoy", body="please look", subject="s", kind="result")["nudge"]
+        self.assertTrue(n["do"].startswith("Do: SendMessage to local_env1:"))
+        self.assertNotIn("ENVOY -", n["do"])
+        self.assertNotIn(self.name(e), n["do"])
+        self.assertNotIn("ListAgents", n["do"])
+        self.assertIn("op=nudge_result", n["do"])
+        self.assertNotIn("titles", n)
 
-    def test_two_recipients_each_get_their_own_rule(self):
-        crit = self.h.register(project="harness-ops", model=MODEL, task="c", role="critic")["id"]
-        self.call("harness_admin", op="session_titled", agent=crit, args={"title": self.title(crit), "status": "done"})
-        r = self.call("harness_send", agent=self.plain, to="%s,%s" % (self.envoy[:8], crit[:8]), body="both", subject="s", kind="task")
-        self.assertEqual(sorted(x is None for x in r["nudge"]["titles"]), [False, True])
-        self.assertEqual(r["nudge"]["do"].count("Do: SendMessage to"), 2)
+    def test_without_an_id_the_mail_waits_titled_or_not(self):
+        r = self.call("harness_send", agent=self.plain, to=self.envoy[:8], body="please look", subject="s", kind="result")
+        self.assertEqual(r["nudge"], "none (no app session id: mail only)")
+        self.assertEqual(self.events("nudge.offered"), [])
+
+    def test_two_recipients_each_get_their_own_id(self):
+        e = self.holder("envoy", "local_env2")
+        c = self.holder("critic", "local_cri2")
+        r = self.call("harness_send", agent=self.plain, to="%s,%s" % (e[:8], c[:8]), body="both", subject="s", kind="result")
+        self.assertEqual(r["nudge"]["do"].count("Do: SendMessage to local_"), 2)
 
 
 if __name__ == "__main__":

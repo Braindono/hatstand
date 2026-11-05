@@ -24,7 +24,12 @@ class DB(Base):
         self.addCleanup(self._p.stop)
         for r in ("alpha", "beta", "gamma"):
             self.h.role_define("operator", r, "proj")
-        self.a, self.b, self.c = (self.agent(r, "proj") for r in ("alpha", "beta", "gamma"))
+        ids = []
+        for r in ("alpha", "beta", "gamma"):     # 0.22.0 (item 6): a nudge needs the holder's own app session id; warm, so no wake cap
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": "local_" + r}):
+                ids.append(self.agent(r, "proj"))
+            D.settle(self.h, ids[-1])
+        self.a, self.b, self.c = ids
 
     def send(self, frm, to, body="please do the thing", kind="task", **kw):
         return M.call(self.h, "harness_send", dict({"agent": frm, "to": to, "body": body, "kind": kind}, **kw))
@@ -40,12 +45,12 @@ class Nudge(DB):
         self.assertIn(r["id"], n["line"])
         self.assertNotIn("SECRET-BODY-TEXT", json.dumps(n))
         self.assertTrue(n["do"].startswith("Do: SendMessage to "))
-        self.assertEqual(self.ev("nudge.sent")[0]["data"]["msg"], r["id"])
+        self.assertEqual(self.ev("nudge.offered")[0]["data"]["msg"], r["id"])      # 0.21.1: renamed; nudge.sent is still read as an offer
 
     def test_notice_and_operator_get_none(self):
         self.assertNotIn("nudge", self.send(self.a, "role:beta", kind="notice"))
         self.assertNotIn("nudge", self.send(self.a, "operator"))
-        self.assertEqual(self.ev("nudge.sent"), [])
+        self.assertEqual(self.ev("nudge.offered"), [])
 
     def test_off_and_mute_are_operator_owned(self):
         self.op["doorbell"] = {"mute_roles": ["beta"]}

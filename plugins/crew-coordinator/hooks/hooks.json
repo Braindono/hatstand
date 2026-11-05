@@ -59,6 +59,15 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "Bash|mcp__.*harness_admin",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/release_guard.py\" post"
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {

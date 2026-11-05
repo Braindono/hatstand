@@ -74,3 +74,6 @@ A Stop hook adds one reminder line if a reply had no inbox call.
 
 ## Corpus/lint WARN (moved verbatim from SKILL.md in 0.21.0)
 - Corpus/lint WARN: fix own files, send kind=review to the owner role at once; never ask the operator to (D-1e728).
+
+## Role `?` (moved verbatim from SKILL.md in 0.21.1)
+- Role `?`: propose a one-line role → `harness_admin op=set_expertise`.

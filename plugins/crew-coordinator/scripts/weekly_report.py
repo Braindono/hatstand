@@ -46,6 +46,14 @@ def ledger_events(home, since, until):
     return out
 
 
+def _nudge_outcomes(events):
+    """0.21.1 (A-58ff8 item 4): the report counts what the SENDERS reported (delivered, held, skipped), never the offers alone; offers with no
+    result are pending (no later call from the sender) or unreported (a later call came). The old nudge.sent event still counts as an offer."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import doorbell
+    return doorbell.outcomes(events)
+
+
 def ledger_stats(events):
     c = collections.Counter(e.get("type") for e in events)
     d = lambda e: e.get("data") or {}
@@ -55,8 +63,8 @@ def ledger_stats(events):
     rel = [d(e) for e in events if e.get("type") == "release.published"]
     per = collections.Counter(r.get("name") for r in rel)
     return {
-        "nudges": {"sent": c["nudge.sent"], "skipped": c["nudge.skipped"],
-                   "cap_hits": sum(n for k, n in skipped.items() if k.endswith("cap")), "skipped_by_reason": dict(skipped)},
+        "nudges": dict(_nudge_outcomes(events), skipped=c["nudge.skipped"],
+                   cap_hits=sum(n for k, n in skipped.items() if k.endswith("cap")), skipped_by_reason=dict(skipped)),
         "gates": {"approvals_requested": c["approval.requested"], "granted": c["approval.granted"], "denied": c["approval.denied"],
                   "expired": c["approval.expired"], "consumed": c["approval.consumed"],
                   "release_gate_overrides": [{"name": x.get("name"), "version": x.get("version"), "reason": str(x.get("reason") or "")[:160]}
@@ -157,7 +165,9 @@ def render(r, prev):
                  + (f" ERR {v['digest_error']}" if v.get("digest_error") else ""))
     n, g, rl, h = r["ledger"]["nudges"], r["ledger"]["gates"], r["ledger"]["releases"], r["ledger"]["handoffs"]
     L += ["", "## 2. Nudges",
-          f"- sent {n['sent']}{_chg(n['sent'], P('ledger', 'nudges', 'sent'))}, skipped {n['skipped']}{_chg(n['skipped'], P('ledger', 'nudges', 'skipped'))}, "
+          f"- offered {n['offered']}{_chg(n['offered'], P('ledger', 'nudges', 'offered'))}; reported by senders: delivered {n['delivered']}, held {n['held']}, "
+          f"skipped {n['skipped_by_sender']}; no result: pending {n['pending']}, unreported {n['unreported']}",
+          f"- harness skips {n['skipped']}{_chg(n['skipped'], P('ledger', 'nudges', 'skipped'))}, "
           f"cap hits {n['cap_hits']}{_chg(n['cap_hits'], P('ledger', 'nudges', 'cap_hits'))}",
           "- skipped by reason: " + (", ".join(f"{k} {v}" for k, v in sorted(n["skipped_by_reason"].items(), key=lambda x: -x[1])) or "none"),
           "", "## 3. Gates",

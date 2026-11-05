@@ -7,6 +7,7 @@ if not os.environ.get("CC_TEST_ISOLATED"):
     _root = tempfile.mkdtemp(prefix="cc-tests-")
     for _k in [k for k in os.environ if k.startswith("HARNESS_")]:
         del os.environ[_k]
+    os.environ.pop("CLAUDE_CODE_HOST_SESSION_ID", None)   # 0.22.0: the runner's own chat id must never become a test agent's address
     os.environ["HOME"] = _root
     os.environ["HARNESS_STATE_DIR"] = os.path.join(_root, "state")
     os.environ["CC_TEST_ISOLATED"] = _root

@@ -292,6 +292,7 @@ class Approvals(Base):
         les = self.h.record(cur, "note", "Lesson: t", "What happened: x\nCause: y\nRule: Check twice", ["lesson", "role:all"])["id"]
         seen["lesson_curate"] = self.adm("lesson_curate", cur, ids=[les])   # 0.19.0 (R-122): no expiry, the operator decides
         self.assertIsNone(self.h._approval_records()[seen["lesson_curate"]["pending"]]["expires"])
+        seen["wake_pin"] = self.adm("wake_pin", cur)    # 0.21.2 (item 1, critic B1): the operator pins wake triggers
         self.assertEqual(set(seen), set(H.Harness.APPROVAL_ACTIONS))
         for action, r in seen.items():
             self.assertEqual((r.get("action"), r["pending"][:2]), (action, "A-"), (action, r))
