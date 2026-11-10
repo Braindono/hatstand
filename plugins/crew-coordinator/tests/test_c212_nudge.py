@@ -60,10 +60,15 @@ class Base(unittest.TestCase):
         return n if isinstance(n, dict) else {"do": n or ""}                              # 0.22.0: a mail-only send returns a plain string
 
 
+def E(role, trig=TRIG, kind="recurring"):
+    """0.23.0 (A-08480 item 3 gap 6): a pin entry in the only accepted form; plain trig_ strings are refused."""
+    return {"trigger": trig, "kind": kind, "prompt": D.wake_prompt(role)}
+
+
 class Item1WakeTrigger(Base):
     def test_a_role_with_a_trigger_gets_the_remotetrigger_line(self):
-        self.wake({"secretary": TRIG})
         s = self.reg("secretary")
+        self.wake({"secretary": E("secretary")})
         n = self.nudge(self.plain, "role:secretary", "task")
         self.assertIn("Do: RemoteTrigger action=run trigger_id=%s" % TRIG, n["do"])
         self.assertTrue(n["do"].startswith("Do: RemoteTrigger"))                          # 0.22.0: no id, so the trigger line stands alone
@@ -76,8 +81,8 @@ class Item1WakeTrigger(Base):
         self.assertEqual(self.events("nudge.offered")[-1]["data"]["by_trigger"], [True])
 
     def test_one_wake_per_role_per_10_minutes_over_all_senders(self):
-        self.wake({"secretary": TRIG})
         self.reg("secretary")
+        self.wake({"secretary": E("secretary")})
         senders = [self.reg(host="local_s%d" % i) for i in range(3)]
         outs = [self.nudge(x, "role:secretary", "task")["do"] for x in senders]
         self.assertEqual(["RemoteTrigger" in o for o in outs], [True, False, False])
@@ -88,9 +93,9 @@ class Item1WakeTrigger(Base):
         self.assertEqual(len(self.events("nudge.trigwake")), 2)
 
     def test_the_cap_is_per_role(self):
-        self.wake({"secretary": TRIG, "design-system": "trig_FAKEdesignsys0002x"})
         self.reg("secretary")
         self.reg("design-system")
+        self.wake({"secretary": E("secretary"), "design-system": E("design-system", "trig_FAKEdesignsys0002x")})
         self.assertIn(TRIG, self.nudge(self.plain, "role:secretary")["do"])
         self.assertIn("trig_FAKEdesignsys0002x", self.nudge(self.reg(host="local_o"), "role:design-system")["do"])
 
@@ -114,26 +119,28 @@ class Item1WakeTrigger(Base):
         self.assertEqual(self.events("nudge.trigwake"), [])
 
     def test_pin_then_an_edited_file_is_ignored_until_pinned_again(self):
-        self.wake({"secretary": TRIG})
         self.reg("secretary")
+        self.wake({"secretary": E("secretary")})
         self.wake_file({"secretary": "trig_ATTACKERchosen01"})
         do = self.nudge(self.plain, "role:secretary")["do"]
         self.assertIn(TRIG, do)
         self.assertNotIn("ATTACKER", do)
-        self.wake({"secretary": "trig_NEWoperatorPinned1"})                               # the operator re-pins: now it counts
+        self.wake({"secretary": E("secretary", "trig_NEWoperatorPinned1")})                               # the operator re-pins: now it counts
         with mock.patch.object(D.time, "time", return_value=time.time() + D.TRIG_WAKE_MIN * 60 + 5):
             self.assertIn("trig_NEWoperatorPinned1", self.nudge(self.reg(host="local_r"), "role:secretary")["do"])
 
     def test_the_operator_sees_the_entries_and_only_the_grant_pins(self):
-        self.wake_file({"secretary": TRIG, "ops-coder": "sendmessage:x"})
+        sec = self.reg("secretary")
+        self.wake_file({"secretary": E("secretary"), "ops-coder": "sendmessage:x", "curator": "trig_FAKEplainstring01"})
         r = self.call("harness_admin", op="wake_pin", agent=self.plain, args={})
-        self.assertEqual(r["entries"], {"secretary": TRIG})
-        self.assertEqual(r["ignored"], ["ops-coder"])
+        want = dict(E("secretary"), holder=sec)
+        self.assertEqual(r["entries"], {"secretary": want})
+        self.assertEqual(r["ignored"], ["curator", "ops-coder"])                          # 0.23.0 (gap 6): a plain trig_ string is left out
         rec = self.h._approval_records()[r["pending"]]
-        self.assertEqual(rec["args"], {"entries": {"secretary": TRIG}})                  # the card's args are exactly what gets pinned
+        self.assertEqual(rec["args"], {"entries": {"secretary": want}})                  # the card's args are exactly what gets pinned
         self.assertIsNone(self.h.state().wake_pin)                                       # nothing pinned before the grant
         self.h.approve(r["pending"], code=rec["args_digest"][:4], tty=True)
-        self.assertEqual(self.h.state().wake_pin["entries"], {"secretary": TRIG})
+        self.assertEqual(self.h.state().wake_pin["entries"]["secretary"]["trigger"], TRIG)
 
     def test_only_the_operator_pins_and_only_human_events_count(self):
         with self.assertRaises(H.HarnessError):
@@ -146,22 +153,22 @@ class Item1WakeTrigger(Base):
         self.assertNotIn("RemoteTrigger", self.nudge(self.plain, "role:secretary")["do"])
 
     def test_an_empty_pin_unpins(self):
-        self.wake({"secretary": TRIG})
-        self.wake({})
         self.reg("secretary")
+        self.wake({"secretary": E("secretary")})
+        self.wake({})
         self.assertNotIn("RemoteTrigger", self.nudge(self.plain, "role:secretary")["do"])
 
     def test_critic_b2_two_roles_one_trigger_share_the_slot(self):
-        self.wake({"secretary": TRIG, "design-system": TRIG})
         self.reg("secretary")
         self.reg("design-system")
+        self.wake({"secretary": E("secretary"), "design-system": E("design-system")})
         self.assertIn(TRIG, self.nudge(self.plain, "role:secretary")["do"])
         self.assertNotIn("RemoteTrigger", self.nudge(self.reg(host="local_o"), "role:design-system")["do"])
         self.assertEqual(len(self.events("nudge.trigwake")), 1)
 
     def test_delivered_frees_the_slot_skipped_and_woke_do_not(self):
-        self.wake({"secretary": TRIG})
         self.reg("secretary")
+        self.wake({"secretary": E("secretary")})
         n = self.nudge(self.plain, "role:secretary")
         self.call("harness_admin", op="nudge_result", agent=self.plain, args={"msg_id": n["msg_id"], "outcome": "delivered", "reason": "row"})
         b = self.reg(host="local_fb")
@@ -172,10 +179,10 @@ class Item1WakeTrigger(Base):
         self.assertEqual(len(self.events("nudge.trigwake_released")), 1)
 
     def test_notice_kind_and_a_capped_offer_never_wake(self):
-        self.wake({"secretary": TRIG})
         s = self.reg("secretary")
+        self.wake({"secretary": E("secretary")})
         r = self.call("harness_send", agent=self.plain, to="role:secretary", body="b", kind="notice")
-        self.assertNotIn("nudge", r)
+        self.assertEqual(r.get("nudge"), "none (kind notice starts no wake)")     # 0.23.0 (A-08480 item 4): the notice says it rings nobody
         with mock.patch.object(D, "_opcfg", return_value=dict(D._opcfg(self.h), global_per_hour=1)):
             self.h.store.append("nudge.offered", "system", {"msg": "m-x", "from": "z", "to": ["q"]})     # fills the global cap of 1
             r = self.call("harness_send", agent=self.reg(host="local_c2"), to="role:secretary", body="b2", kind="task")
@@ -184,10 +191,10 @@ class Item1WakeTrigger(Base):
         self.assertTrue(s)
 
     def test_both_sides_get_a_working_line(self):
-        self.wake({"secretary": TRIG})
         self.reg("secretary")
-        c = self.reg("curator", "local_cur")
         cowork_sender = self.reg("design-system")
+        self.wake({"secretary": E("secretary")})
+        c = self.reg("curator", "local_cur")
         to_code = self.nudge(cowork_sender, c[:8], "task")["do"]                       # Cowork sender to a Code chat
         self.assertIn("No SendMessage tool here (a Cowork or cloud chat): report skipped with reason no_sendmessage", to_code)
         self.assertNotIn("ListAgents", to_code)                                           # 0.22.0: no row check at all
@@ -198,8 +205,8 @@ class Item1WakeTrigger(Base):
         self.assertNotIn("fire_trigger", to_cowork)                                       # critic B3: billing unverified (D-f6eaa)
 
     def test_woke_is_a_valid_outcome(self):
-        self.wake({"secretary": TRIG})
         self.reg("secretary")
+        self.wake({"secretary": E("secretary")})
         n = self.nudge(self.plain, "role:secretary", "task")
         res = self.call("harness_admin", op="nudge_result", agent=self.plain, args={"msg_id": n["msg_id"], "outcome": "woke", "reason": "trigger"})
         self.assertEqual(res["outcome"], "woke")

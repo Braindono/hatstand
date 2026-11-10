@@ -98,7 +98,7 @@ def ledger_cue_hashes(h, ON):
     corpus.retagged (id) or a superseding corpus.recorded (supersedes names it) comes AFTER its latest vouched curated event, so a re-planted
     pre-archive cue file does not re-arm it. A later vouched re-curation re-arms it; an unarchive alone does not."""
     p = os.path.join(h, "_harness", "events.jsonl")
-    requested, granted, out = {}, set(), {}
+    requested, granted, out, digests = {}, set(), {}, {}
     try:
         with open(p, "rb") as f:
             for ln in f:
@@ -115,6 +115,8 @@ def ledger_cue_hashes(h, ON):
                     continue
                 t = ev.get("type")
                 if t == "approval.requested" and d.get("action") == "lesson_curate" and isinstance(d.get("id"), str):
+                    if d["id"] in requested:   # 0.23.0 (A-08480 item 1): the first request per id wins, as in harness._approval_records
+                        continue
                     items = {}
                     for it in (d.get("args") or {}).get("lessons") or []:
                         try:
@@ -124,8 +126,10 @@ def ledger_cue_hashes(h, ON):
                         except Exception:
                             continue
                     requested[d["id"]] = items
+                    digests[d["id"]] = d.get("args_digest")
                 elif t == "approval.granted" and d.get("state") == "granted" and isinstance(d.get("id"), str):
-                    granted.add(d["id"])
+                    if d.get("args_digest") is None or d.get("args_digest") == digests.get(d["id"]):   # 0.23.0 item 1: the digest the operator saw
+                        granted.add(d["id"])
                 elif t == "lesson.curated" and isinstance(d.get("id"), str) and isinstance(d.get("cue_hash"), str):
                     ap = d.get("approval")
                     if isinstance(ap, str) and ap in granted and requested.get(ap, {}).get(d["id"]) == d["cue_hash"]:

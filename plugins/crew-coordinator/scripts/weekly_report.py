@@ -167,6 +167,8 @@ def render(r, prev):
     L += ["", "## 2. Nudges",
           f"- offered {n['offered']}{_chg(n['offered'], P('ledger', 'nudges', 'offered'))}; reported by senders: delivered {n['delivered']}, held {n['held']}, "
           f"skipped {n['skipped_by_sender']}; no result: pending {n['pending']}, unreported {n['unreported']}",
+          f"- relayed nudges the app refused (refused_by_app): {n.get('refused_by_app', 0)}"
+          + (" (" + ", ".join(f"{k[:8]} {v}" for k, v in sorted(n.get("refused_by_relayer", {}).items())) + ")" if n.get("refused_by_relayer") else ""),
           f"- harness skips {n['skipped']}{_chg(n['skipped'], P('ledger', 'nudges', 'skipped'))}, "
           f"cap hits {n['cap_hits']}{_chg(n['cap_hits'], P('ledger', 'nudges', 'cap_hits'))}",
           "- skipped by reason: " + (", ".join(f"{k} {v}" for k, v in sorted(n["skipped_by_reason"].items(), key=lambda x: -x[1])) or "none"),

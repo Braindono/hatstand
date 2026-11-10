@@ -17,6 +17,11 @@ REAL_MACHINE_ID = H.machine_id                                                  
 TRIG = "trig_FAKEsecretary0001x"
 
 
+def WP(role, trig=TRIG, kind="recurring"):
+    """0.23.0 (A-08480 item 3 gap 6): a pin entry in the only accepted form; plain trig_ strings are refused."""
+    return {"trigger": trig, "kind": kind, "prompt": D.wake_prompt(role)}
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         m = mock.patch.object(H, "machine_id", lambda: "machine-mac")             # 0.22.1: every sender in these tests is on "the Mac"
@@ -98,9 +103,9 @@ class Item6RoleOnly(Base):
             self.assertFalse(hasattr(D, gone))
 
     def test_6g_a_pinned_trigger_with_no_id_gives_the_trigger_line_only(self):
-        self.h.wake_pin_apply("operator", {"secretary": TRIG})
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": ""}):
             self.reg("secretary", None)
+        self.h.wake_pin_apply("operator", {"secretary": WP("secretary")})     # 0.23.0 (gap 3, gap 6): dict form, holder registered first
         do = self.send(self.plain, "role:secretary")["nudge"]["do"]
         self.assertTrue(do.startswith("Do: RemoteTrigger action=run trigger_id=" + TRIG))
         self.assertNotIn("SendMessage", do)
@@ -243,9 +248,9 @@ class Item7Alarm(Base):
         self.warm(c)
         self.assertEqual([x["cond"] for x in D.alarm_scan(self.h, now=time.time() + 3700, force=True)], ["skipped"])
         # a trigger-only offer (no id line) skipped with no_remotetrigger raises nothing (critic m-99bea4382739)
-        self.h.wake_pin_apply("operator", {"secretary": TRIG})
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": ""}):
             sec = self.reg("secretary", None)
+        self.h.wake_pin_apply("operator", {"secretary": WP("secretary")})     # 0.23.0 (gap 3, gap 6): dict form, holder registered first
         s3 = self.reg(host="local_s3")
         n3 = self.send(s3, "role:secretary")["nudge"]["msg_id"]
         self.call("harness_admin", op="nudge_result", agent=s3, args={"msg_id": n3, "outcome": "skipped", "reason": "no_remotetrigger"})

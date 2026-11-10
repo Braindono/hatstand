@@ -48,7 +48,7 @@ class Nudge(DB):
         self.assertEqual(self.ev("nudge.offered")[0]["data"]["msg"], r["id"])      # 0.21.1: renamed; nudge.sent is still read as an offer
 
     def test_notice_and_operator_get_none(self):
-        self.assertNotIn("nudge", self.send(self.a, "role:beta", kind="notice"))
+        self.assertEqual(self.send(self.a, "role:beta", kind="notice").get("nudge"), "none (kind notice starts no wake)")   # 0.23.0 item 4
         self.assertNotIn("nudge", self.send(self.a, "operator"))
         self.assertEqual(self.ev("nudge.offered"), [])
 

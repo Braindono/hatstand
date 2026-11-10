@@ -159,8 +159,8 @@ class Sim(unittest.TestCase):
         self.assertEqual(r["checks"]["I8"], [])
 
     def test_an_added_approval_action_needs_the_scope(self):
-        cand = candidate(self.tmp, patch={"scripts/harness.py": ('"release_scope", "hatstand_push", "lesson_curate", "wake_pin")',
-                                                                 '"release_scope", "hatstand_push", "lesson_curate", "wake_pin", "sim_extra")')})
+        cand = candidate(self.tmp, patch={"scripts/harness.py": ('"case_close")   # 0.23.0 (A-08480 item 2): proctor case approvals',     # 0.23.0: the tuple's end moved
+                                                                 '"case_close", "sim_extra")   # 0.23.0 (A-08480 item 2): proctor case approvals')})
         answer_all(cand)
         self.assertIn("I5 approval action added without scope: sim_extra", self.run_sim(cand)["failed"])
         self.assertNotIn("I5 approval action added without scope: sim_extra", self.run_sim(cand, allow_actions=["sim_extra"])["failed"])

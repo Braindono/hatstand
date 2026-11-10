@@ -206,6 +206,88 @@ def _func_src(path, name):
     return None
 
 
+def _seg(lines, node):
+    """Source text of a node's whole lines. ast.get_source_segment re-splits the entire file on every call (6852 calls over harness.py's
+    8000 lines made questions() take minutes: D-b23ac), so slice the split lines once instead."""
+    return "\n".join(lines[node.lineno - 1:(getattr(node, "end_lineno", node.lineno) or node.lineno)])
+
+
+def _do_funcs(src):
+    """Names of functions whose body contains the text "Do:" (cc 0.22.4: continuation lines of a Do-line string)."""
+    out, lines = set(), src.split("\n")
+    try:
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and "Do:" in _seg(lines, node):
+                out.add(node.name)
+    except SyntaxError:
+        pass
+    return out
+
+
+def _do_names(src):
+    """Names read inside a function that holds "Do:" (cc 0.22.4b: a module constant that feeds a Do-line)."""
+    out, lines = set(), src.split("\n")
+    try:
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and "Do:" in _seg(lines, node):
+                out |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    except SyntaxError:
+        pass
+    return out
+
+
+def _module_assign(src):
+    """line number -> name, for every line of a module-level assignment."""
+    m = {}
+    try:
+        for node in ast.parse(src).body:
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                tg = node.targets if isinstance(node, ast.Assign) else [node.target]
+                nm = [t.id for t in tg if isinstance(t, ast.Name)]
+                for ln in range(node.lineno, (getattr(node, "end_lineno", node.lineno) or node.lineno) + 1):
+                    for n in nm:
+                        m.setdefault(ln, n)
+    except SyntaxError:
+        pass
+    return m
+
+
+def _append_funcs(src):
+    """Names of functions whose body holds a store.append( call (cc 0.22.4b: a payload built before the call)."""
+    out, lines = set(), src.split("\n")
+    try:
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and "store.append(" in _seg(lines, node):
+                out.add(node.name)
+    except SyntaxError:
+        pass
+    return out
+
+
+def _ends_with_store(lines, v):
+    """True when the text of the expression `v` (the object of `.append`) ends with `store` (self.store, h.store, store)."""
+    try:
+        ln = lines[(getattr(v, "end_lineno", v.lineno) or v.lineno) - 1]
+        return ln.encode("utf-8")[:v.end_col_offset].decode("utf-8", "ignore").endswith("store")
+    except (IndexError, AttributeError):
+        return False
+
+
+def _append_lines(src):
+    """line number -> start line of the enclosing `store.append(` call (cc 0.22.4: new field on an existing event type)."""
+    m, lines = {}, src.split("\n")
+    try:
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "append" \
+                    and _ends_with_store(lines, node.func.value):
+                for ln in range(node.lineno, (getattr(node, "end_lineno", node.lineno) or node.lineno) + 1):
+                    m.setdefault(ln, node.lineno)
+    except SyntaxError:
+        pass
+    return m
+
+
 def _qid(cls, key):
     return "Q-" + hashlib.sha256(f"{cls}|{key}".encode()).hexdigest()[:8]
 
@@ -220,24 +302,34 @@ def questions(installed, candidate):
         new, old = _read(os.path.join(candidate, "scripts", fn)), _read(os.path.join(installed, "scripts", fn))
         nl, ol = new.splitlines(), old.splitlines()
         fmap, omap = _func_at(new), _func_at(old)
-        groups = {}                     # (cls, where) -> changed lines; added AND deleted lines count (critic S4 blocker 2)
+        dnew, dold = _do_funcs(new), _do_funcs(old)
+        nnew, nold = _do_names(new), _do_names(old)
+        massign_new, massign_old = _module_assign(new), _module_assign(old)
+        fnew, fold = _append_funcs(new), _append_funcs(old)
+        anew, aold = _append_lines(new), _append_lines(old)
+        groups = {}                   # (cls, where) -> changed lines; added AND deleted lines count (critic S4 blocker 2)
         for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, ol, nl, autojunk=False).get_opcodes():
             if tag == "equal":
                 continue
-            changed = [(nl[j], fmap.get(j + 1, "<module>"), "+") for j in range(j1, j2)] + \
-                      [(ol[i], omap.get(i + 1, "<module>"), "-") for i in range(i1, i2)]
-            for line, fnn, sign in changed:
+            changed = [(nl[j], fmap.get(j + 1, "<module>"), "+", dnew, anew.get(j + 1), nnew, massign_new.get(j + 1), fnew) for j in range(j1, j2)] + \
+                      [(ol[i], omap.get(i + 1, "<module>"), "-", dold, aold.get(i + 1), nold, massign_old.get(i + 1), fold) for i in range(i1, i2)]
+            for line, fnn, sign, dset, acall, nset, massign, aset in changed:
                 where = f"scripts/{fn}::{fnn}"
                 if WRITE_RE.search(line):
                     groups.setdefault(("write", where), []).append(sign + line.strip())
-                if "Do:" in line:
+                if "Do:" in line or fnn in dset or (massign and massign in nset):   # 0.22.4: any changed line in a function that holds a Do: string; 0.22.4b: or a module constant such a function reads
                     groups.setdefault(("doline", where), []).append(sign + line.strip())
+                if acall is not None or "store.append(" in line or fnn in aset:     # 0.22.4: any changed line of a store.append( call; 0.22.4b: or of a function that holds one
+                    groups.setdefault(("event_call", where), []).append(sign + line.strip())
         for (cls, where), lines in sorted(groups.items()):
             # critic S4 blocker 1: the id carries a hash of the changed lines, so last release's answer never covers a new change
             key = f"{where}#{hashlib.sha256(chr(10).join(lines).encode()).hexdigest()[:8]}"
             if cls == "write":
                 add(cls, key, f"File write changed in {where} ({len(lines)} line(s)). Which path does it write, and what if that path "
                               "already holds local data the package does not own?")
+            elif cls == "event_call":
+                add("event", key, f"store.append( call, or a function that holds one, changed in {where} ({len(lines)} line(s)): a new field or "
+                                  "changed payload on an event type. Who reads it, and is docs/EVENTS.md current?")
             else:
                 add(cls, key, f"Do-line text changed in {where} ({len(lines)} line(s)). Which sender acts on it, and what if that sender "
                               "lacks the tool it names?")

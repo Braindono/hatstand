@@ -1403,6 +1403,20 @@ def norm_name(s: str) -> str:
 # Projection (replay)
 # --------------------------------------------------------------------------
 
+# 0.23.0 (A-08480 item 2): proctor events, ledger only, no judging code (spec 2026-11-10_cc0230-proctor-events-spec.md v2.1)
+CASE_SEVERITIES = ("S0", "S1", "S2", "S3")
+CASE_CAUSES = ("rule", "reasoning", "execution", "environment")
+CASE_OUTCOMES = ("fixed", "routed", "wont_fix", "duplicate", "shadow")
+CASE_PEER_ROLES = ("envoy", "harness-critic", "proctor", "secretary", "curator")
+CASE_APPROVALS = ("proctor_shadow", "case_severity", "case_close")
+CASE_EVENTS = ("case.opened", "trace.card", "case.classified", "case.routed", "case.severity", "case.severity_proposed",
+               "case.sample", "case.audit_blind", "case.audited", "case.closed")
+
+
+def _sev(x):
+    return CASE_SEVERITIES.index(x) if x in CASE_SEVERITIES else None
+
+
 class State:
     def __init__(self, events, now=None):
         self.now = time.time() if now is None else now
@@ -1427,6 +1441,16 @@ class State:
         self.drift_seen = set()        # 0.22.0: code shas with a release.drift event already written
         self.drift_explained = set()   # 0.22.0: code shas a curator or envoy explained (release.drift_explained)
         self.wake_pin = None       # 0.21.2 (item 1, critic B1): the latest operator-approved wake.pinned data; the doorbell reads triggers only here
+        self.trigwake_msgs = {}    # 0.23.0 (A-08480 item 3 gap 4): msg_id -> [(trigger, nudge.trigwake seq)]
+        self.trig_spent = {}       # 0.23.0 gap 4: trigger -> trigwake seqs whose message got a spending `woke` report (no ledger-tail read)
+        self.cases = {}            # 0.23.0 (item 2): case id -> folded case (see _case_fold)
+        self.case_by_source = {}   # source_seq -> case id (one case per ledger event)
+        self.case_cards = {}       # trace card id -> case id
+        self.case_samples = {}     # sample id -> {cases, expires_t, seq}
+        self.proctor_shadow = []   # [(seq, on)] from granted proctor_shadow; shadow is ON before the first
+        self.case_rejected = []    # seqs of case events the replay rules did not apply (counted, never deleted)
+        self.case_appr = {}        # approval id -> {action, args, digest, state} for the three case approval actions (first request wins)
+        self.case_appr_used = set()   # approval ids an applied case event already used
         self.roles = {}         # role -> {project, owns, partners, carry, desc, holder}
         self.roster_seqs = []   # seqs of roster-changing events (footer ◇n)
         self.corpus_count = 0
@@ -1648,6 +1672,22 @@ class State:
                 self.drift_explained.add(d["code_sha"])
         elif typ == "wake.pinned" and actor == "human":
             self.wake_pin = dict(d, seq=ev["seq"], ts=ev["ts"])
+        elif typ.startswith("approval.") and (typ == "approval.requested" and (d.get("action") in CASE_APPROVALS) or d.get("id") in self.case_appr):
+            self._case_appr_fold(typ, d)
+        elif typ == "proctor.shadow" or typ in CASE_EVENTS:
+            err = self.case_error(typ, actor, d, ev["seq"], t)
+            if err:
+                self.case_rejected.append(ev["seq"])
+            else:
+                self._case_fold(typ, actor, d, ev["seq"], t)
+        elif typ == "nudge.trigwake":   # 0.23.0 (A-08480 item 3 gap 4): the spent set is folded here, on the full rebuild and the incremental path alike
+            if d.get("msg_id") and d.get("trigger"):
+                self.trigwake_msgs.setdefault(d["msg_id"], []).append((d["trigger"], ev["seq"]))
+        elif typ == "nudge.result" and d.get("outcome") == "woke" and d.get("msg_id") in self.trigwake_msgs:
+            import doorbell as _D
+            if _D.result_spends(d):
+                for trig, sq in self.trigwake_msgs[d["msg_id"]]:
+                    self.trig_spent.setdefault(trig, []).append(sq)
         elif typ == "session.bound":
             self.sessions[d["session_id"]] = d["agent"]
             self._session_apply(d["agent"], d["session_id"], ev)
@@ -1791,6 +1831,244 @@ class State:
         t = self.titles.get(aid)
         exp = self.expected_title(aid)
         return t["title"] if (t and exp and str(t.get("title")).lower() == exp.lower()) else None
+
+    # ---------- 0.23.0 (A-08480 item 2): proctor cases. One validator for the write path (under the ledger lock) and the replay.
+    def _case_appr_fold(self, typ, d):
+        i = d.get("id")
+        if typ == "approval.requested":
+            if i not in self.case_appr:      # first request per id wins (item 1)
+                self.case_appr[i] = {"action": d.get("action"), "args": d.get("args") or {}, "digest": d.get("args_digest"), "state": "pending"}
+        elif typ == "approval.granted":
+            r = self.case_appr[i]
+            if r["state"] == "pending" and (d.get("args_digest") is None or d.get("args_digest") == r["digest"]):
+                r["state"] = d.get("state") or "granted"
+        elif typ in ("approval.denied", "approval.expired") and self.case_appr[i]["state"] == "pending":
+            self.case_appr[i]["state"] = typ[9:]
+
+    def chat_line(self, aid):
+        """The agent plus its predecessors reached through COMPACTION links only (the same chat). A restore or role claim into a new chat
+        starts a fresh line (critic N-5d433 blocker 1)."""
+        out, cur = [], aid
+        while cur and cur not in out:
+            out.append(cur)
+            a = self.agents.get(cur) or {}
+            cur = a.get("predecessor") if a.get("spawn_reason") == "compaction" else None
+        return out
+
+    def chat_sessions(self, aid):
+        out = set()
+        for x in self.chat_line(aid):
+            a = self.agents.get(x) or {}
+            out |= {v for v in (a.get("session_id"), a.get("host_session_id")) if v}
+        return out
+
+    def shadow_on(self):
+        return self.proctor_shadow[-1][1] if self.proctor_shadow else True
+
+    def case_involved(self, c, aid):
+        """R-self: the agent's chat line or app sessions meet those of any writer of a classification, severity change, proposal or close."""
+        line, sess = set(self.chat_line(aid)), self.chat_sessions(aid)
+        for w in c["writers"]:
+            if w == "human":
+                continue
+            if line & set(self.chat_line(w)) or sess & self.chat_sessions(w):
+                return True
+        return False
+
+    def _case_appr_ok(self, d, action, keys):
+        """An event written by an operator grant: a granted, unused approval of this action whose args match the event."""
+        r = self.case_appr.get(d.get("approval"))
+        if not r or r["action"] != action or r["state"] != "granted" or d.get("approval") in self.case_appr_used:
+            return False
+        return all(r["args"].get(k) == d.get(k) for k in keys)
+
+    def case_error(self, typ, actor, d, seq=None, t=None):
+        """-> None when the event may be applied, else the reason. Order rules only: who may write rests on `actor` and the role at this
+        point of the log, which any process can set (stated limit, rubric 2)."""
+        t = self.now if t is None else t
+        role = "operator" if actor == "human" else (self.role_of(actor) or "")
+        if typ == "proctor.shadow":
+            return None if (actor == "human" and isinstance(d.get("on"), bool) and self._case_appr_ok(d, "proctor_shadow", ("on",))) \
+                else "proctor.shadow needs a granted proctor_shadow approval"
+        if typ == "case.sample":
+            if role != "harness-critic":
+                return "case.sample: only the harness-critic draws a sample"
+            cs = d.get("cases") or []
+            if not (isinstance(cs, list) and 1 <= len(cs) <= 30 and len(set(cs)) == len(cs)):
+                return "case.sample: 1-30 distinct case ids"
+            for x in cs:
+                if x not in self.cases:
+                    return f"case.sample: no case {x}"
+                if any(x in sm["cases"] and sm["expires_t"] > t for sm in self.case_samples.values()):
+                    return f"case.sample: {x} is already in an open sample"
+            return None
+        c = self.cases.get(d.get("case"))
+        if typ == "case.opened":
+            if actor not in self.agents:
+                return "case.opened: unknown agent"
+            if d.get("case") in self.cases:
+                return "case.opened: case id in use"
+            if _sev(d.get("severity")) is None:
+                return "case.opened: severity S0-S3"
+            if d.get("source_seq") in self.case_by_source:
+                return "case.opened: a case for that ledger event exists"
+            return None
+        if not c:
+            return f"{typ}: no case {str(d.get('case'))[:12]}"
+        if c["closed"] and typ not in ("case.audit_blind", "case.audited"):
+            return f"{typ}: case {c['id']} is closed"
+        cur = c["severity"]
+        if typ == "trace.card":
+            if d.get("source") == "self":
+                if actor not in self.chat_line(d.get("subject")) and d.get("subject") not in self.chat_line(actor):
+                    return "trace.card: a self card is written by the subject"
+            elif d.get("source") == "peer":
+                if role not in CASE_PEER_ROLES:
+                    return "trace.card: a peer card is written by " + ", ".join(CASE_PEER_ROLES)
+            else:
+                return "trace.card: source self|peer"
+            return None
+        if typ == "case.severity":
+            if d.get("old") != cur:
+                return f"case.severity: stale: current is {cur}"
+            o, n = _sev(d.get("old")), _sev(d.get("new"))
+            if n is None or o == n:
+                return "case.severity: new must be another of S0-S3"
+            if d.get("approval"):
+                return None if self._case_appr_ok(d, "case_severity", ("case", "old", "new")) else "case.severity: approval not granted, used, or for other args"
+            if role != "proctor":
+                return "case.severity: only the proctor, or the operator through a case_severity approval"
+            if n > o and o == 0:
+                return "case.severity: the proctor may not lower an S0; use action propose (the operator decides)"
+            return None
+        if typ == "case.severity_proposed":
+            if role != "proctor":
+                return "case.severity_proposed: proctor only"
+            if cur != "S0":
+                return "case.severity_proposed: only an S0 is proposed for lowering"
+            for p in c["proposals"]:
+                if (self.case_appr.get(p) or {}).get("state") == "pending":
+                    return f"case.severity_proposed: proposal {p} is still pending"
+            r = self.case_appr.get(d.get("approval"))
+            if not r or r["action"] != "case_severity" or r["args"].get("case") != c["id"]:
+                return "case.severity_proposed: needs its case_severity request"
+            return None
+        if typ == "case.classified":
+            if role != "proctor":
+                return "case.classified: proctor only"
+            if d.get("cause") not in CASE_CAUSES or not set(d.get("contributing") or []) <= set(CASE_CAUSES) or len(d.get("contributing") or []) > 2:
+                return "case.classified: cause and up to 2 contributing factors from " + "|".join(CASE_CAUSES)
+            if not d.get("owner") or d.get("owner") not in self.roles:
+                return "case.classified: owner must be a defined role"
+            if any(x["actor"] in self.chat_line(actor) for x in c["classifications"]):
+                return "case.classified: one classification per instance per case"
+            return None
+        if typ == "case.routed":
+            if role != "proctor":
+                return "case.routed: proctor only"
+            if self.shadow_on():
+                return "case.routed: refused while the proctor is in shadow (operator approval proctor_shadow ends it)"
+            if not c["classifications"] or d.get("to") != c["classifications"][-1]["owner"]:
+                return "case.routed: to must be the classified owner"
+            return None
+        if typ in ("case.audit_blind", "case.audited"):
+            if role != "proctor":
+                return f"{typ}: proctor only"
+            if self.case_involved(c, actor):
+                return f"{typ}: this instance (its chat or app session) took part in case {c['id']}"
+            line = set(self.chat_line(actor))
+            if typ == "case.audit_blind":
+                sm = self.case_samples.get(d.get("sample"))
+                if not sm or c["id"] not in sm["cases"] or sm["expires_t"] <= t:
+                    return "case.audit_blind: the case is not in an open sample drawn by the harness-critic"
+                if any(b in line for b in c["blinds"]):
+                    return "case.audit_blind: one blind per instance per case"
+                if d.get("cause") not in CASE_CAUSES or _sev(d.get("severity")) is None or not d.get("owner"):
+                    return "case.audit_blind: cause, owner and severity"
+                return None
+            if not any(b in line for b in c["blinds"]):
+                return "case.audited: write your case.audit_blind first"
+            if d.get("verdict") not in ("uphold", "overturn"):
+                return "case.audited: verdict uphold|overturn"
+            if d.get("of_seq") not in c["judged_seqs"]:
+                return "case.audited: of_seq must be a classification or severity event of the case"
+            if any(a["of_seq"] == d.get("of_seq") and a["actor"] in line for a in c["audits"]):
+                return "case.audited: already audited by this instance"
+            return None
+        if typ == "case.closed":
+            out = d.get("outcome")
+            if out not in CASE_OUTCOMES:
+                return "case.closed: outcome " + "|".join(CASE_OUTCOMES)
+            if not c["classifications"]:
+                return "case.closed: no close without a cause and an owner (classify first)"
+            if out == "shadow" and cur == "S0":
+                return "case.closed: an S0 case cannot be closed as shadow; it stays open"
+            if out == "duplicate":
+                r = self.cases.get(d.get("ref"))
+                if not r or r["id"] == c["id"] or r["closed"] or _sev(r["severity"]) > _sev(cur):
+                    return "case.closed: a duplicate's ref must be another OPEN case of equal or higher severity"
+            if out == "routed" and not c["routed"]:
+                return "case.closed: routed needs a case.routed event for the case"
+            if out == "fixed" and not d.get("ref"):
+                return "case.closed: fixed needs a ref"
+            if d.get("approval"):
+                return None if self._case_appr_ok(d, "case_close", ("case", "outcome")) else "case.closed: approval not granted, used, or for other args"
+            if role != "proctor":
+                return "case.closed: only the proctor, or the operator through a case_close approval"
+            if cur == "S0" and out in ("wont_fix", "duplicate"):
+                return "case.closed: an S0 case closed as wont_fix or duplicate needs the operator (action request_close)"
+            if self.shadow_on():
+                if cur == "S0":
+                    return "case.closed: an S0 case stays open while the proctor is in shadow"
+                if out != "shadow":
+                    return "case.closed: while in shadow the only outcome is shadow"
+            return None
+        return "unknown case event"
+
+    def _case_fold(self, typ, actor, d, seq, t):
+        if d.get("approval") and typ in ("case.severity", "case.closed", "proctor.shadow"):
+            self.case_appr_used.add(d["approval"])
+        if typ == "proctor.shadow":
+            self.proctor_shadow.append((seq, bool(d["on"])))
+            return
+        if typ == "case.sample":
+            self.case_samples[d.get("sample")] = {"cases": list(d["cases"]), "expires_t": float(d.get("expires_t") or 0), "seq": seq}
+            return
+        if typ == "case.opened":
+            self.cases[d["case"]] = {"id": d["case"], "seq": seq, "t": t, "opener": actor, "source_seq": d.get("source_seq"),
+                                     "severity": d["severity"], "opened_severity": d["severity"], "summary": d.get("summary"),
+                                     "family": d.get("family"), "magnitude": d.get("magnitude"), "cards": [], "classifications": [],
+                                     "severities": [], "proposals": [], "routed": [], "blinds": {}, "audits": [], "closed": None,
+                                     "writers": [], "judged_seqs": set()}
+            if d.get("source_seq") is not None:
+                self.case_by_source[d["source_seq"]] = d["case"]
+            return
+        c = self.cases[d["case"]]
+        row = dict(d, seq=seq, actor=actor)
+        if typ == "trace.card":
+            c["cards"].append(row)
+            self.case_cards[d.get("card")] = c["id"]
+        elif typ == "case.classified":
+            c["classifications"].append(row)
+            c["writers"].append(actor)
+            c["judged_seqs"].add(seq)
+        elif typ == "case.routed":
+            c["routed"].append(row)
+        elif typ == "case.severity":
+            c["severities"].append(row)
+            c["severity"] = d["new"]
+            c["writers"].append(actor)
+            c["judged_seqs"].add(seq)
+        elif typ == "case.severity_proposed":
+            c["proposals"].append(d.get("approval"))
+            c["writers"].append(actor)
+        elif typ == "case.audit_blind":
+            c["blinds"][actor] = seq
+        elif typ == "case.audited":
+            c["audits"].append(row)
+        elif typ == "case.closed":
+            c["closed"] = row
+            c["writers"].append(actor)
 
     def role_of(self, aid):
         """Role held by aid or inherited along its predecessor chain."""
@@ -4239,6 +4517,8 @@ class Harness:
             tg = next((x for x in str(r_.get("tags") or "").split() if x.startswith(pres)), None)
             if tg:
                 nlines.append(f"topic {_clean_text(tg.split(':', 2)[2], 24)} · {_clean_text(r_['ts'], 16)} · recall {r_['id']}")
+        if cr(role) == "proctor":      # 0.23.0 (A-08480 item 2, critic N-5d433): no-carry, blind audits: no previous case outcomes here
+            nlines = ["omitted for the proctor: no-carry, blind audits"]
         secs.append(("State note", nlines, 300, None))
         # 0.17.0 (R-051c): the role's vault, rule-built (paths and counts only), <=100 tokens; absent when there is none
         try:
@@ -4265,8 +4545,11 @@ class Harness:
             if ev.get("type") == "restore.slot" and (cr((ev.get("data") or {}).get("role")) == role or ev.get("actor") in mine):
                 slot = ev
                 break
+        if cr(role) == "proctor":      # 0.23.0 (item 2): see the state note above
+            slot = None
         secs.append(("Last exchange", [f"{slot['ts'][:16]} user: {_clean_text(slot['data'].get('user'), 500) or '-'}",
                                        f"assistant: {_clean_text(slot['data'].get('assistant'), 500) or '-'}"] if slot
+                     else ["omitted for the proctor: no-carry, blind audits"] if cr(role) == "proctor"
                      else ["n/a (cloud chat or no Stop hook yet): see the state note's Chat lines"], 280, None))
         # 4 Owes reply
         owes = []
@@ -5468,6 +5751,296 @@ class Harness:
         ev = self.store.append("concept.linked", aid, {"entry": entry, "concept": concept, "role": role, "by": mine or aid[:8]})
         return {"linked": concept, "entry": entry, "role": role, "seq": ev.get("seq")}
 
+    # ---------- 0.23.0 (A-08480 item 2): proctor case events. Writes go through MCP only (no CLI write path); the server sets by, instance,
+    # sessions, shadow, preceding and the ids; the same State.case_error runs under the ledger lock and on replay.
+    CASE_ARGS = {
+        "open": {"source", "severity", "magnitude", "family", "summary"},
+        "card": {"case", "subject", "rule_ids", "rationale", "diff"},
+        "classify": {"case", "cause", "contributing", "owner", "family"},
+        "route": {"case", "to", "backlog_ref"},
+        "severity": {"case", "old", "new", "reason"},
+        "propose": {"case", "new", "reason"},
+        "sample": {"cases", "expires"},
+        "audit_blind": {"case", "sample", "cause", "owner", "severity"},
+        "audit": {"case", "verdict", "of_seq", "reason"},
+        "close": {"case", "outcome", "ref", "reason"},
+        "show": {"case"},
+        "request_severity": {"case", "old", "new", "reason"},
+        "request_close": {"case", "outcome", "ref", "reason"},
+    }
+
+    def _case_stamp(self, st, aid, data):
+        data.update(by=cr(st.role_of(aid) or "") or "unassigned", instance=aid[:8], sessions=sorted(st.chat_sessions(aid)))
+        return data
+
+    def _case_append(self, typ, aid, data, actor=None):
+        """Append under the ledger lock; State.case_error re-runs there on the fresh State, so a check and its write cannot be split."""
+        def pre(_store):
+            err = self.state().case_error(typ, actor or aid, data)
+            if err:
+                raise HarnessError(err)
+        return self.store.append(typ, actor or aid, data, precheck=pre)
+
+    def _case_new_id(self, st, prefix, taken):
+        i = prefix + uuid.uuid4().hex[:5]
+        while i in taken:
+            i = prefix + uuid.uuid4().hex[:5]
+        return i
+
+    def _case_source_seq(self, src):
+        """{seq?, msg_id?, entry?} -> the ledger seq of that event; every key given must exist and name the same event."""
+        if not isinstance(src, dict) or not set(src) <= {"seq", "msg_id", "entry"} or not src:
+            raise HarnessError("case open: source must be {seq?, msg_id?, entry?} with at least one")
+        seqs = set()
+        evs = None
+        if src.get("seq") is not None:
+            try:
+                q = int(src["seq"])
+            except (TypeError, ValueError):
+                raise HarnessError("case open: source.seq must be a number")
+            evs = evs or self.store.read_all()
+            if not any(e.get("seq") == q for e in evs):
+                raise HarnessError(f"case open: no ledger event {q}")
+            seqs.add(q)
+        if src.get("msg_id"):
+            m = self.state().messages.get(str(src["msg_id"]))
+            if not m:
+                raise HarnessError(f"case open: no message {_clean_text(src['msg_id'], 20)}")
+            seqs.add(m["seq"])
+        if src.get("entry"):
+            evs = evs or self.store.read_all()
+            hit = [e["seq"] for e in evs if e.get("type") == "corpus.recorded" and (e.get("data") or {}).get("id") == src["entry"]]
+            if not hit:
+                raise HarnessError(f"case open: no corpus entry {_clean_text(src['entry'], 20)}")
+            seqs.add(hit[0])
+        if len(seqs) != 1:
+            raise HarnessError("case open: the source keys name different ledger events")
+        return seqs.pop()
+
+    def _case_preceding(self, subject, upto):
+        """The subject's last 5 ledger events at or before `upto` (its own events and the call.failed events naming it). Ledger events only:
+        harness calls, not every tool call."""
+        out = []
+        for e in self.store.read_all():
+            if (e.get("seq") or 0) > upto:
+                break
+            mine = e.get("actor") == subject or (e.get("type") == "call.failed" and (e.get("data") or {}).get("agent") == subject[:8])
+            if mine:
+                out.append({"seq": e["seq"], "type": e["type"], "ok": e["type"] != "call.failed"})
+        return out[-5:]
+
+    def case_op(self, agent, args):
+        """harness_admin op=case args={action, ...}. -> a small dict. See CASE_ARGS for the keys each action takes."""
+        if not isinstance(args, dict):
+            raise HarnessError("case: args must be an object")
+        act = args.get("action")
+        if act not in self.CASE_ARGS:
+            raise HarnessError("case: action must be one of " + "|".join(self.CASE_ARGS))
+        extra = set(args) - self.CASE_ARGS[act] - {"action"}
+        if extra:
+            raise HarnessError(f"case {act}: unknown or server-set keys: {', '.join(sorted(map(str, extra)))[:120]}")
+        st = self.state()
+        aid = self.writer(st, agent)
+        a = args
+        if act == "show":
+            return self.case_show(aid, a.get("case"))
+        if act == "open":
+            sseq = self._case_source_seq(a.get("source"))
+            if sseq in st.case_by_source:
+                return {"case": st.case_by_source[sseq], "duplicate": True}
+            mag = a.get("magnitude")
+            keys = ("recoverability", "radius", "cost")
+            if not (isinstance(mag, dict) and set(mag) == set(keys) and all(isinstance(mag[k], int) and 1 <= mag[k] <= 5 for k in keys)):
+                raise HarnessError("case open: magnitude {recoverability, radius, cost}, each 1-5")
+            sev = a.get("severity")
+            if sev not in CASE_SEVERITIES:
+                raise HarnessError("case open: severity S0-S3")
+            data = {"case": self._case_new_id(st, "X-", st.cases), "source": a["source"], "source_seq": sseq, "severity": sev,
+                    "magnitude": {k: mag[k] for k in keys}, "summary": _clean_text(a.get("summary"), 160), "self_reported": True}
+            if mag["recoverability"] == 5 and sev != "S0":
+                data.update(severity="S0", forced="irreversible")
+            if a.get("family"):
+                data["family"] = _clean_text(a["family"], 60)
+            ev = self._case_append("case.opened", aid, self._case_stamp(st, aid, data))
+            return {"case": data["case"], "severity": data["severity"], "seq": ev["seq"]}
+        c = st.cases.get(str(a.get("case") or "")) if act != "sample" else None
+        if act != "sample" and not c:
+            raise HarnessError(f"case {act}: no case {_clean_text(a.get('case'), 12)}")
+        if act == "card":
+            subj = self.resolve(st, str(a.get("subject") or ""), follow=False)
+            src = "self" if (subj in st.chat_line(aid) or aid in st.chat_line(subj)) else "peer"
+            rids = a.get("rule_ids") or []
+            if not isinstance(rids, list) or len(rids) > 5:
+                raise HarnessError("case card: rule_ids is a list of at most 5 corpus ids")
+            for r in rids:
+                if not self.corpus.entry_meta(str(r)):
+                    raise HarnessError(f"case card: no corpus entry {_clean_text(r, 20)}")
+            diff = a.get("diff")
+            if diff is not None:
+                if not (isinstance(diff, dict) and set(diff) == {"path", "sha"} and isinstance(diff["path"], str)
+                        and re.match(r"^[0-9a-f]{7,64}$", str(diff["sha"]))):
+                    raise HarnessError("case card: diff is {path, sha} only (never content)")
+                diff = {"path": _clean_text(diff["path"], 200), "sha": diff["sha"]}
+            prev = [x["card"] for x in c["cards"] if x.get("source") == src]
+            data = {"card": self._case_new_id(st, "TC-", st.case_cards), "case": c["id"], "subject": subj,
+                    "preceding": self._case_preceding(subj, c["source_seq"] if c["source_seq"] is not None else c["seq"]),
+                    "label": "ledger events only", "rule_ids": [str(r) for r in rids], "rationale": _clean_text(a.get("rationale"), 300),
+                    "self_reported": True, "source": src}
+            if diff:
+                data["diff"] = diff
+            if prev:
+                data["supersedes"] = prev[-1]
+            ev = self._case_append("trace.card", aid, self._case_stamp(st, aid, data))
+            return {"card": data["card"], "case": c["id"], "source": src, "seq": ev["seq"]}
+        if act == "classify":
+            data = {"case": c["id"], "cause": a.get("cause"), "contributing": list(a.get("contributing") or []), "owner": cr(str(a.get("owner") or "")),
+                    "shadow": st.shadow_on()}
+            if a.get("family"):
+                data["family"] = _clean_text(a["family"], 60)
+            ev = self._case_append("case.classified", aid, self._case_stamp(st, aid, data))
+            return {"case": c["id"], "classified": data["cause"], "shadow": data["shadow"], "seq": ev["seq"]}
+        if act == "route":
+            data = {"case": c["id"], "to": cr(str(a.get("to") or ""))}
+            if a.get("backlog_ref"):
+                data["backlog_ref"] = _clean_text(a["backlog_ref"], 80)
+            ev = self._case_append("case.routed", aid, self._case_stamp(st, aid, data))
+            return {"case": c["id"], "routed": data["to"], "seq": ev["seq"]}
+        if act == "severity":
+            data = {"case": c["id"], "old": a.get("old"), "new": a.get("new"), "reason": _clean_text(a.get("reason"), 120), "self_reported": True}
+            ev = self._case_append("case.severity", aid, self._case_stamp(st, aid, data))
+            return {"case": c["id"], "severity": data["new"], "seq": ev["seq"]}
+        if act == "propose":
+            if st.role_of(aid) != "proctor" or c["severity"] != "S0":
+                raise HarnessError("case propose: the proctor proposes lowering an S0 (current is %s)" % c["severity"])
+            if a.get("new") not in CASE_SEVERITIES[1:]:
+                raise HarnessError("case propose: new is S1, S2 or S3")
+            for p_ in c["proposals"]:
+                if (st.case_appr.get(p_) or {}).get("state") == "pending":
+                    raise HarnessError(f"case propose: proposal {p_} is still pending")
+            reason = _clean_text(a.get("reason"), 120)
+            r = self.request_approval(aid, "case_severity", {"case": c["id"], "old": "S0", "new": a["new"], "reason": reason})
+            data = {"case": c["id"], "old": "S0", "new": a["new"], "reason": reason, "approval": r["pending"], "self_reported": True}
+            ev = self._case_append("case.severity_proposed", aid, self._case_stamp(self.state(), aid, data))
+            return dict(r, case=c["id"], seq=ev["seq"])
+        if act == "sample":
+            try:
+                days = float(a.get("expires"))
+            except (TypeError, ValueError):
+                raise HarnessError("case sample: expires is a number of days, at most 14")
+            if not 0 < days <= 14:
+                raise HarnessError("case sample: expires is a number of days, at most 14")
+            data = {"sample": self._case_new_id(st, "S-", st.case_samples), "cases": list(a.get("cases") or []),
+                    "expires_t": round(time.time() + days * 86400, 3)}
+            ev = self._case_append("case.sample", aid, self._case_stamp(st, aid, data))
+            return {"sample": data["sample"], "cases": len(data["cases"]), "seq": ev["seq"]}
+        if act == "audit_blind":
+            data = {"case": c["id"], "sample": a.get("sample"), "cause": a.get("cause"), "owner": cr(str(a.get("owner") or "")), "severity": a.get("severity")}
+            ev = self._case_append("case.audit_blind", aid, self._case_stamp(st, aid, data))
+            return {"case": c["id"], "blind": True, "seq": ev["seq"]}
+        if act == "audit":
+            try:
+                of = int(a.get("of_seq"))
+            except (TypeError, ValueError):
+                raise HarnessError("case audit: of_seq is the seq of a classification or severity event")
+            data = {"case": c["id"], "verdict": a.get("verdict"), "of_seq": of, "reason": _clean_text(a.get("reason"), 160), "self_reported": True}
+            ev = self._case_append("case.audited", aid, self._case_stamp(st, aid, data))
+            return {"case": c["id"], "verdict": data["verdict"], "seq": ev["seq"]}
+        if act == "close":
+            data = {"case": c["id"], "outcome": a.get("outcome"), "reason": _clean_text(a.get("reason"), 120), "self_reported": True}
+            if a.get("ref"):
+                data["ref"] = _clean_text(a["ref"], 80)
+            ev = self._case_append("case.closed", aid, self._case_stamp(st, aid, data))
+            return {"case": c["id"], "closed": data["outcome"], "seq": ev["seq"]}
+        if act in ("request_severity", "request_close"):
+            if act == "request_severity":
+                pa = {"case": c["id"], "old": a.get("old"), "new": a.get("new"), "reason": _clean_text(a.get("reason"), 120)}
+                if pa["old"] not in CASE_SEVERITIES or pa["new"] not in CASE_SEVERITIES or pa["old"] == pa["new"]:
+                    raise HarnessError("case request_severity: old and new, two different of S0-S3")
+                return self.request_approval(aid, "case_severity", pa)
+            pa = {"case": c["id"], "outcome": a.get("outcome"), "reason": _clean_text(a.get("reason"), 120)}
+            if a.get("ref"):
+                pa["ref"] = _clean_text(a["ref"], 80)
+            if pa["outcome"] not in CASE_OUTCOMES:
+                raise HarnessError("case request_close: outcome " + "|".join(CASE_OUTCOMES))
+            return self.request_approval(aid, "case_close", pa)
+        raise HarnessError("case: unhandled action")
+
+    def case_grant_event(self, action, args, approval):
+        """0.23.0 (item 2): what a granted case approval writes, as (type, data). Checked first (case_grant_check), written after
+        approval.granted, so the replay finds the grant before the event."""
+        if action == "proctor_shadow":
+            return "proctor.shadow", {"on": args.get("on"), "approval": approval, "by": "operator"}
+        if action == "case_severity":
+            return "case.severity", {"case": args.get("case"), "old": args.get("old"), "new": args.get("new"),
+                                     "reason": _clean_text(args.get("reason"), 120), "approval": approval, "by": "operator"}
+        d = {"case": args.get("case"), "outcome": args.get("outcome"), "reason": _clean_text(args.get("reason"), 120),
+             "approval": approval, "by": "operator"}
+        if args.get("ref"):
+            d["ref"] = args["ref"]
+        return "case.closed", d
+
+    def case_grant_check(self, action, args, approval):
+        """The rules the event will meet, checked BEFORE the grant is written (the grant itself is assumed): None or the reason."""
+        st = self.state()
+        saved = st.case_appr.get(approval)
+        st.case_appr[approval] = dict(saved or {"action": action, "args": args, "digest": None}, state="granted")
+        try:      # the State may be the shared cache: put the record back whatever happens
+            typ, d = self.case_grant_event(action, args, approval)
+            return st.case_error(typ, "human", d)
+        finally:
+            if saved is None:
+                st.case_appr.pop(approval, None)
+            else:
+                st.case_appr[approval] = saved
+
+    def case_show(self, aid, case):
+        st = self.state()
+        c = st.cases.get(str(case or ""))
+        if not c:
+            raise HarnessError(f"case show: no case {_clean_text(case, 12)}")
+        hide = (st.role_of(aid) == "proctor" and not st.case_involved(c, aid)
+                and not any(b in st.chat_line(aid) for b in c["blinds"]))
+        out = [f"{c['id']} · opened seq {c['seq']} by {_clean_text((st.agents.get(c['opener']) or {}).get('sobriquet') or c['opener'][:8], 40)}"
+               f" · source seq {c['source_seq']} · opened {c['opened_severity']}"
+               + ("" if hide else f" · now {c['severity']}") + (" · CLOSED" if c["closed"] and not hide else ""),
+               fence("summary: " + str(c.get("summary") or ""), "the case opener")]
+        for k in c["cards"]:
+            out.append(f"card {k['card']} ({k['source']}) seq {k['seq']} · subject #{k['subject'][:8]} · preceding ({k.get('label')}): "
+                       + ", ".join(f"{p['seq']} {p['type']}{'' if p['ok'] else ' FAILED'}" for p in k.get("preceding") or [])
+                       + (f" · rules {', '.join(k.get('rule_ids') or [])}" if k.get("rule_ids") else "")
+                       + (f" · diff {k['diff']['path']} {k['diff']['sha'][:12]}" if k.get("diff") else ""))
+            out.append(fence("rationale: " + str(k.get("rationale") or ""), "the card writer"))
+        if hide:
+            out.append("classification, severity changes, audits and close: hidden until your blind (case.audit_blind)")
+        else:
+            for x in c["classifications"]:
+                out.append(f"classified seq {x['seq']} by #{x['actor'][:8]}: {x['cause']}"
+                           + (f" (+{', '.join(x.get('contributing') or [])})" if x.get("contributing") else "")
+                           + f" · owner {x['owner']}" + (" · shadow" if x.get("shadow") else ""))
+            for x in c["severities"]:
+                out.append(f"severity seq {x['seq']}: {x['old']} → {x['new']}" + (f" (operator, {x['approval']})" if x.get("approval") else f" by #{x['actor'][:8]}"))
+                out.append(fence("reason: " + str(x.get("reason") or ""), "the severity writer"))
+            for x in c["routed"]:
+                out.append(f"routed seq {x['seq']} to {x['to']}")
+            for x in c["audits"]:
+                out.append(f"audit seq {x['seq']} of seq {x['of_seq']} by #{x['actor'][:8]}: {x['verdict']}")
+            if c["closed"]:
+                x = c["closed"]
+                out.append(f"closed seq {x['seq']}: {x['outcome']}" + (f" ref {x['ref']}" if x.get("ref") else ""))
+        return {"text": "\n".join(out)}
+
+    def cases_list(self, open_only=False, severity=None):
+        st = self.state()
+        rows = []
+        for c in sorted(st.cases.values(), key=lambda c: c["seq"]):
+            if open_only and c["closed"]:
+                continue
+            if severity and c["severity"] != severity:
+                continue
+            rows.append({"case": c["id"], "severity": c["severity"], "closed": (c["closed"] or {}).get("outcome"),
+                         "cards": len(c["cards"]), "classified": len(c["classifications"]), "seq": c["seq"]})
+        return {"cases": rows, "shadow": st.shadow_on(), "rejected": len(st.case_rejected)}
+
     def concept_cards(self, concept, limit=5, offset=0):
         """recall concept=<id>: live entries linked to the concept or any narrower concept, then entries carrying a legacy tag the mapping
         assigns to them. Ranked about > applies > mentions, newest first; unlinked legacy-tag hits last."""
@@ -5554,6 +6127,24 @@ class Harness:
         return "\n".join(out)
 
     # ---------- release registry
+    GATE_FILES = ("scripts/release_sim.py", "scripts/sim_launcher.py", "scripts/release_guard.py")
+
+    @classmethod
+    def scope_warnings(cls, args):
+        """0.22.5 (item 2): warnings (never a refusal) when a release_scope is filed: an item over 200 characters (the hard check at approval
+        refuses it, so say so now), or a gate file described as changed in the items or rationale whose path is not in any item."""
+        a = args if isinstance(args, dict) else {}
+        items = [x for x in (a.get("items") or []) if isinstance(x, str)]
+        out = [f"item {n + 1} is {len(x.strip())} characters; the limit is 200, so the approval would be refused: shorten it"
+               for n, x in enumerate(items) if len(x.strip()) > 200]
+        text = " ".join(items + [str(a.get("rationale") or "")])
+        for g in cls.GATE_FILES:
+            base = g.rsplit("/", 1)[-1]
+            names = {base, base.rsplit(".", 1)[0]} - {"hooks"}
+            if any(re.search(r"(?<![A-Za-z0-9_])" + re.escape(nm) + r"(?![A-Za-z0-9_])", text) for nm in names) and not any(g in x for x in items):
+                out.append(f"gate file {g} is described as changed but its path is not in any item: name it in an item so the approval covers it")
+        return out[:6]
+
     def release_scope(self, by, plugin, version, items, rationale, approval_ref=None):
         """0.16.1 (item 8): record the operator-approved scope of one release: {plugin, version, items[], rationale,
         approval_ref}. Operator only (reached through an approval request). Release scope is the operator's decision."""
@@ -5571,31 +6162,76 @@ class Harness:
         self.store.append("release.scope", "human", data)
         return {"plugin": plugin, "version": version, "items": len(data["items"])}
 
-    WAKE_ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
-    WAKE_TRIG_RE = re.compile(r"^trig_[A-Za-z0-9]{8,64}$")
+    WAKE_ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}\Z")
+    WAKE_TRIG_RE = re.compile(r"^trig_[A-Za-z0-9]{8,64}\Z")
+
+    def _wake_entry_ok(self, role, v, holder_now=None):
+        """0.22.5 (item 3): -> the entry to pin, or None. A dict is {trigger, kind: recurring|run_once, prompt, holder?}: the prompt must equal the
+        template for the role; the harness records prompt_sha and the role's holder at pin time (a holder given in the request must be that holder).
+        0.23.0 (A-08480 item 3 gap 6): a plain trig_ string (the legacy form) is refused; pins already in the ledger are read as before."""
+        import doorbell as _D
+        if not isinstance(v, dict) or not (isinstance(v.get("trigger"), str) and self.WAKE_TRIG_RE.match(v["trigger"])):
+            return None
+        if v.get("kind") not in _D.WAKE_KINDS or not _D.wake_prompt_ok(role, v.get("prompt")):
+            return None
+        holder = holder_now
+        if v.get("holder") and v["holder"] != holder:
+            return None
+        out = {"trigger": v["trigger"], "kind": v["kind"], "holder": holder,
+               "prompt_sha": hashlib.sha256(_D.wake_prompt(role).encode("utf-8")).hexdigest()[:16]}
+        if isinstance(v.get("link"), str) and re.match(r"^https://claude\.ai/[A-Za-z0-9/_.?=&%-]{1,160}$", v["link"]):
+            out["link"] = v["link"]
+        return out
+
+    @staticmethod
+    def _wake_vacant(st, entries):
+        """0.23.0 (A-08480 item 3 gap 3): a dict entry for a role with no live holder is refused for the whole request, with how to proceed."""
+        for k in sorted(entries or {}):
+            if isinstance(entries[k], dict) and not st.role_holder(k):
+                raise HarnessError(f"wake_pin: role {k[:40]} has no live holder, so its pin could never go stale; remove its entry "
+                                   f"(wake.py clear {k[:40]}) and request the pin again, or wait until the role has a holder")
 
     def wake_entries_from_file(self):
-        """0.21.2 (item 1, critic B1): the role -> trigger id entries of <home>/_harness/wake.json that pass the format check, plus the keys
-        left out. The file is only the operator's proposal: nothing reads it at send time, and it counts only once pinned (wake_pin)."""
+        """0.21.2 (item 1, critic B1): the role -> entry map of <home>/_harness/wake.json that passes the check, plus the keys left out. The file is
+        only the operator's proposal: nothing reads it at send time, and it counts only once pinned (wake_pin). 0.22.5: a value may be a trig_
+        string (legacy) or {trigger, kind, prompt}; the prompt must equal the template and the holder is the role's current holder."""
         try:
             with open(os.path.join(self.store.dir, "wake.json"), encoding="utf-8") as f:
                 w = json.load(f)
         except (OSError, ValueError):
             w = {}
         w = w if isinstance(w, dict) else {}
-        keep = {k: v for k, v in w.items() if isinstance(k, str) and self.WAKE_ROLE_RE.match(k) and isinstance(v, str) and self.WAKE_TRIG_RE.match(v)}
+        st = self.state()
+        keep = {}
+        for k, v in w.items():
+            if isinstance(k, str) and self.WAKE_ROLE_RE.match(k):
+                if self._wake_entry_ok(k, v, st.role_holder(k)) is not None:      # the card carries the request form, so the operator sees the prompt
+                    keep[k] = v if isinstance(v, str) else {"trigger": v["trigger"], "kind": v["kind"], "prompt": v["prompt"].strip(),
+                                                           "holder": st.role_holder(k)}
+                    if isinstance(v, dict) and self._wake_entry_ok(k, v, st.role_holder(k)).get("link"):
+                        keep[k]["link"] = v["link"]
         return dict(sorted(keep.items())[:40]), sorted(str(k)[:40] for k in w if k not in keep)
 
     def wake_pin_apply(self, by, entries):
         """0.21.2 (item 1): operator only (reached through an approval whose args ARE the entries, so the operator approves exactly what
-        the card shows). Writes one wake.pinned event; the doorbell uses the latest one and never the file. {} unpins every role."""
+        the card shows). Writes one wake.pinned event; the doorbell uses the latest one and never the file. {} unpins every role.
+        0.22.5: entries are {role: trig_... | {trigger, kind, prompt, holder}}; a dict entry is stored without the prompt text, with its sha."""
         if by not in OPERATOR:
             raise HarnessError("wake_pin is operator-only (the operator approves the request with `harness.py approve <id>`)")
-        if not isinstance(entries, dict) or len(entries) > 40 or not all(
-                isinstance(k, str) and self.WAKE_ROLE_RE.match(k) and isinstance(v, str) and self.WAKE_TRIG_RE.match(v) for k, v in entries.items()):
-            raise HarnessError("wake_pin: entries must be {role: trig_...}, at most 40")
-        self.store.append("wake.pinned", "human", {"entries": dict(sorted(entries.items()))})
-        return {"pinned": len(entries), "roles": sorted(entries)}
+        if not isinstance(entries, dict) or len(entries) > 40 or not all(isinstance(k, str) and self.WAKE_ROLE_RE.match(k) for k in entries):
+            raise HarnessError("wake_pin: entries must be {role: {trigger, kind, prompt}}, at most 40")
+        st = self.state()
+        self._wake_vacant(st, entries)      # 0.23.0 (gap 3): checked again at apply time; the holder may have left since the request
+        out = {}
+        for k, v in entries.items():
+            ent = self._wake_entry_ok(k, v, st.role_holder(k))
+            if ent is None:
+                raise HarnessError(f"wake_pin: entry for {k[:40]} is not {{trigger, kind: recurring|run_once, prompt}} "
+                                   "whose prompt equals the wake template for the role (and whose holder, if given, is the role's current holder); "
+                                   "a plain trig_ string is no longer accepted")
+            out[k] = ent
+        self.store.append("wake.pinned", "human", {"entries": dict(sorted(out.items()))})
+        return {"pinned": len(out), "roles": sorted(out)}
 
     def _check_release_cadence(self, st, name, version):
         """0.17.0 (R-057, D-fffe6 decision 6): one release per plugin per cycle. The operator sets the cycle in
@@ -6163,8 +6799,9 @@ class Harness:
     APPROVAL_ACTIONS = ("publish_override", "flag_release", "archive_operator", "unarchive_operator", "pin_operator",
                         "export", "restore_confirmed", "retire_other", "reload_force", "role_define", "role_assign",
                         "set_project", "idle_wake", "task_update_other", "tier_foundation", "corpus_index_pin", "retag_operator",
-                        "release_scope", "hatstand_push", "lesson_curate", "wake_pin")
-    NO_EXPIRY = ("lesson_curate",)   # 0.19.0 (D-c8590): a curation approval waits for the operator, no 600 s TTL
+                        "release_scope", "hatstand_push", "lesson_curate", "wake_pin",
+                        "proctor_shadow", "case_severity", "case_close")   # 0.23.0 (A-08480 item 2): proctor case approvals
+    NO_EXPIRY = ("lesson_curate", "case_severity", "case_close")   # 0.19.0 (D-c8590); 0.23.0: an S0 proposal waits for the operator
     # These two cannot run inside the CLI process (they act on the MCP server / bind a new chat): the grant authorizes
     # the SAME call from the requesting agent, which consumes it once (approval.consumed).
     APPROVAL_DEFERRED = ("reload_force", "restore_confirmed")
@@ -6183,9 +6820,14 @@ class Harness:
             d = ev.get("data") or {}
             i = d.get("id")
             if t == "approval.requested":
+                if i in recs:   # 0.23.0 (A-08480 item 1): the first request per id wins; a later one never replaces args, digest or state
+                    recs[i].setdefault("ignored_requests", []).append({"seq": ev.get("seq"), "t": ev.get("t")})
+                    continue
                 recs[i] = dict(d, state="pending", seq=ev.get("seq"))
             elif i in recs:
                 if t == "approval.granted":
+                    if d.get("args_digest") is not None and d.get("args_digest") != recs[i].get("args_digest"):
+                        continue   # 0.23.0 item 1: a grant covers only the digest the operator saw (legacy grants carry none)
                     recs[i].update(state=d.get("state") or "granted", channel=d.get("channel"), result=d.get("result"))
                 elif t == "approval.denied":
                     recs[i].update(state="denied", channel=d.get("channel"))
@@ -6241,6 +6883,20 @@ class Harness:
             json.loads(canon(args))
         except Exception:
             raise HarnessError("approval args must be plain JSON")
+        if action == "wake_pin":     # 0.22.5 (item 3): a bad prompt is refused when it is requested, not only when the operator grants
+            ent = args.get("entries")
+            if not isinstance(ent, dict) or len(ent) > 40:
+                raise HarnessError("wake_pin: entries must be {role: {trigger, kind, prompt}}, at most 40")
+            st0 = self.state()
+            for k, v in ent.items():
+                if not (isinstance(k, str) and self.WAKE_ROLE_RE.match(k)) or self._wake_entry_ok(k, v, st0.role_holder(k)) is None:
+                    raise HarnessError(f"wake_pin: entry for {str(k)[:40]} is not {{trigger, kind: recurring|run_once, prompt}} "
+                                       "whose prompt equals the wake template for the role (a plain trig_ string is no longer accepted)")
+            self._wake_vacant(st0, ent)
+        if action == "proctor_shadow" and not (isinstance(args.get("on"), bool) and set(args) <= {"on", "reason"}):
+            raise HarnessError("proctor_shadow: args {on: true|false, reason}")
+        if action in ("case_severity", "case_close") and str(args.get("case") or "") not in self.state().cases:
+            raise HarnessError(f"{action}: no case {_clean_text(args.get('case'), 12)}")
         digest = self.approval_digest(action, args)
         recs = self._approval_records()
         self._expire_seen(recs)
@@ -6279,7 +6935,13 @@ class Harness:
         now = now or time.time()
         left = "no expiry" if r.get("expires") is None else f"{max(0, int((float(r['expires']) - now) // 60))} min left"
         who = (st.agents.get(r.get("caller")) or {}).get("sobriquet") or str(r.get("caller"))[:8]
-        return f"{r['id']} from {_clean_text(who, 40)}: {r['action']}, {left}"
+        return f"{r['id']} from {_clean_text(who, 40)}: {r['action']}, {left}" + self.dup_note(r, " · ")
+
+    @staticmethod
+    def dup_note(r, sep=""):
+        """0.23.0 (A-08480 item 1): one short line when later requests with the same id were ignored (not a Do-line)."""
+        n = len(r.get("ignored_requests") or [])
+        return f"{sep}{n} ignored duplicate request(s) for {r['id']}" if n else ""
 
     def approval_chain(self, i):
         """0.19.0 (R-120): the event chain of one approval (recall ids=[A-xxxxx]); None when the id is not an approval."""
@@ -6300,6 +6962,10 @@ class Harness:
 
     def _pending_shape(self, i, action, args):
         out = {"pending": i, "action": action, "how": self.approve_cmd(i)}
+        if action == "release_scope":
+            w = self.scope_warnings(args)
+            if w:
+                out["warnings"] = w
         if action == "set_project":   # 0.15.6 (N-dacca c): the approval line says what it does not do
             try:
                 st = self.state()
@@ -6308,6 +6974,22 @@ class Harness:
                 note = None
             if note:
                 out["note"] = note
+        if action == "wake_pin":     # 0.22.5 (item 3): the card shows what the operator must check in the cloud UI
+            lines = []
+            try:
+                import doorbell as _D
+                for role, v in sorted((args.get("entries") or {}).items()):
+                    if isinstance(v, dict):
+                        lines.append(f"role:{role} · {v.get('kind')} · trigger {v.get('trigger')} · prompt \"{_D.wake_prompt(role)}\""
+                                     + (f" · cloud link {v['link']}" if v.get("link") else ""))
+                pinned = ((getattr(self.state(), "wake_pin", None) or {}).get("entries") or {})
+                lose = sorted(r for r in pinned if r not in (args.get("entries") or {}))
+                if lose:   # 0.23.0 (gap 6): a pin is a snapshot of wake.json, so every role left out loses its pin
+                    lines.append("roles that lose their pin: " + ", ".join(lose))
+            except Exception:
+                pass
+            if lines:
+                out["note"] = "; ".join(lines)[:900] + ". The prompt is self-reported by the requester: check this text in the cloud UI before approving."
         return out
 
     def approvals(self, pending_only=True):
@@ -6429,6 +7111,23 @@ class Harness:
         if not hmac.compare_digest(str(code or "").strip().lower(), r["args_digest"][:4]):
             raise HarnessError(f"{id}: wrong code")
         state, summary, plan_ = "granted", None, None
+        if r["action"] in CASE_APPROVALS:
+            # 0.23.0 (A-08480 item 2): grant first, then the case event, so the replay finds the grant before the event it allows
+            err = self.case_grant_check(r["action"], r.get("args") or {}, id)
+            gd = {"id": id, "channel": channel, "by": "operator", "state": "failed" if err else "granted",
+                  "result": _clean_text(err, 400) if err else None, "args_digest": r["args_digest"]}
+            self.store.append("approval.granted", "human", gd)
+            if not err:
+                typ, d = self.case_grant_event(r["action"], r.get("args") or {}, id)
+                try:
+                    ev = self._case_append(typ, None, d, actor="human")
+                    summary = f"{typ} written, seq {ev['seq']}"
+                except HarnessError as e:      # the case moved between the check and the write
+                    state, summary = "failed", _clean_text(f"granted, but {typ} was refused: {e}", 400)
+            else:
+                state, summary = "failed", gd["result"]
+            self._write_pending_file()
+            return {"approval": id, "action": r["action"], "state": state, "result": summary}
         if r["action"] in self.APPROVAL_DEFERRED:
             summary = "approved; the requesting agent repeats the same call to use it (once)"
         elif r["action"] == "lesson_curate":
@@ -6446,7 +7145,7 @@ class Harness:
             except Exception as e:   # recorded; the request is not re-armed
                 state, summary = "failed", _clean_text(f"{type(e).__name__}: {e}", 400)
         self.store.append("approval.granted", "human", {"id": id, "channel": channel, "by": "operator",
-                                                        "state": state, "result": summary})
+                                                        "state": state, "result": summary, "args_digest": r["args_digest"]})
         if plan_ is not None:
             self.lesson_curate_write(plan_, id)
         self._write_pending_file()
@@ -7016,6 +7715,12 @@ class Harness:
             do.append(f"▲ approval {self.approval_line(r_, st)} (harness.py approve {r_['id']})")
         if len(pend_rows) > 5:
             do.append(f"▲ +{len(pend_rows) - 5} more approval requests: harness.py pending")
+        try:   # 0.23.0 (A-08480 item 1): a duplicate request id after the request left pending is shown for 24 h
+            for r_ in self._approval_records(events).values():
+                if r_["state"] != "pending" and any(float(x.get("t") or 0) > time.time() - 86400 for x in r_.get("ignored_requests") or []):
+                    do.append("▲ " + self.dup_note(r_))
+        except Exception:
+            pass
         try:   # 0.19.0 (R-120): a failed approval reaches its requester once
             noticed_ = {(e.get("data") or {}).get("id") for e in events if e.get("type") == "approval.noticed"}
             lin_ = set(st.lineage(aid))
@@ -7086,6 +7791,8 @@ class Harness:
         try:    # 0.22.0 (item 7): a delivery alarm on mail this agent has not read yet
             import doorbell as _D
             ch += _D.alarm_lines(self, st, aid)
+            ch += _D.wake_repin_lines(self, st, aid)     # 0.22.5 (item 3): a stale or spent wake pin needs a re-pin
+            ch += _D.proctor_lines(self, st, aid, since)  # 0.23.0 (A-08480 item 2): the proctor's queue; rejected case events
         except Exception:
             pass
 
@@ -8067,6 +8774,8 @@ def main(argv=None):
     s = sub.add_parser("health", help="/health: corpus weight + prune candidates"); s.add_argument("--project"); s.add_argument("--agent"); s.add_argument("--json", action="store_true"); s.add_argument("--bundle", action="store_true", help="write flagged corpus to projects/<project>/review/<date>-flagged-bundle.md")
     s = sub.add_parser("notify-undelivered", help="0.21.0: pushes issued but unsent (or held) past digest_after_minutes, for the secretary digest (read-only); --json")
     s.add_argument("--json", action="store_true")
+    s = sub.add_parser("cases", help="0.23.0: proctor cases (read-only; case events are written through harness_admin op=case only)")
+    s.add_argument("--open", action="store_true"); s.add_argument("--severity", choices=CASE_SEVERITIES); s.add_argument("--json", action="store_true")
     s = sub.add_parser("recall-report", help="0.20.0: weekly recall counts and misses (read-only); --json for the steward script")
     s.add_argument("--weeks", type=int, default=1); s.add_argument("--json", action="store_true")
     s = sub.add_parser("archive", help="archive corpus ids (operator)"); s.add_argument("ids", nargs="+"); s.add_argument("--reason", default="", help='quote each entry\'s rule line in "…" (D-15566 P2)'); s.add_argument("--drafter-model"); s.add_argument("--lead-model")
@@ -8291,12 +9000,19 @@ def main(argv=None):
                 r = CP.resolve(h, a.project, a.path or "")
         elif c == "export":
             r = h.export(a.out)
+        elif c == "cases":
+            r = h.cases_list(open_only=a.open, severity=a.severity)
+            if not a.json:
+                r = {"text": "\n".join([f"{x['case']} {x['severity']} {'closed ' + x['closed'] if x['closed'] else 'open'} · cards {x['cards']}"
+                                         f" · classified {x['classified']} · seq {x['seq']}" for x in r["cases"]] or ["no cases"])
+                     + f"\nshadow {'on' if r['shadow'] else 'off'}" + (f" · rejected case events {r['rejected']}" if r["rejected"] else "")}
         elif c == "pending":
             rows = h.approvals(pending_only=True)
             r = {"text": "\n".join(f"{x['id']} {x['action']} caller={str(x.get('caller'))[:8]} code-digest={x['args_digest'][:12]} "
                                    f"expires in {max(0, int(float(x.get('expires') or 0) - time.time()))}s\n    "
                                    f"args: {_clean_text(json.dumps(x.get('args'), ensure_ascii=False, default=str), 300)}"
                                    + (f"\n    {h.approval_change(x['action'], x.get('args'))}" if h.approval_change(x['action'], x.get('args')) else "")
+                                   + h.dup_note(x, "\n    ")
                                    for x in rows) or "no pending approval requests"}
         elif c == "approve":
             if not (sys.stdin.isatty() and sys.stdout.isatty()):

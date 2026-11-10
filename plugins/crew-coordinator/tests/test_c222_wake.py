@@ -7,7 +7,7 @@ import os, time, unittest
 from unittest import mock
 
 import test_c220_nudge as C
-from test_c220_nudge import D, H, TRIG
+from test_c220_nudge import D, H, TRIG, WP
 
 NOT_URGENT = "Do not skip this step because the mail is not urgent."
 RUN = "cse_01Ft3xMWC2ETC3SihY2sLPDU"
@@ -15,9 +15,10 @@ RUN = "cse_01Ft3xMWC2ETC3SihY2sLPDU"
 
 class T(C.Base):
     def pinned_secretary(self, host=None):
-        self.h.wake_pin_apply("operator", {"secretary": TRIG})
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": ""}):
-            return self.reg("secretary", host)
+            a = self.reg("secretary", host)
+        self.h.wake_pin_apply("operator", {"secretary": WP("secretary")})     # 0.23.0 (gaps 3, 6): dict form, holder registered first
+        return a
 
     def report(self, who, mid, outcome="woke", reason=""):
         return self.call("harness_admin", op="nudge_result", agent=who, args={"msg_id": mid, "outcome": outcome, "reason": reason})
@@ -70,7 +71,7 @@ class T(C.Base):
         self.assertEqual(ev["by"], relay)
         self.assertEqual(ev["for"], self.plain)
         self.assertNotEqual(ev["by"], ev["for"])
-        self.assertEqual(ev["evidence"], {"http": "200", "session": RUN, "self_reported": True})
+        self.assertEqual(ev["evidence"], {"http": "200", "session": RUN, "statuses": ["200"], "self_reported": True})   # 0.23.0 gap 2: + statuses
 
     def test_t4_relayer_without_evidence_or_with_bad_status_is_refused(self):
         self.pinned_secretary()
@@ -85,7 +86,7 @@ class T(C.Base):
 
     def test_t4_status_digits_inside_the_session_id_do_not_count(self):
         self.assertIsNone(D.relay_evidence("cse_01Ab200Cd99"))
-        self.assertEqual(D.relay_evidence("run cse_01Ab200Cd99 status 404"), {"http": "404", "session": "cse_01Ab200Cd99"})
+        self.assertEqual(D.relay_evidence("run cse_01Ab200Cd99 status 404"), {"http": "404", "session": "cse_01Ab200Cd99", "statuses": []})   # 0.23.0 gap 2
         self.assertEqual(D.relay_evidence("session_01Ft3xMWC2 HTTP 200")["session"], "session_01Ft3xMWC2")
 
     def test_t4_the_sender_reports_as_before_without_evidence(self):
@@ -106,9 +107,11 @@ class T(C.Base):
         self.assertEqual(len(self.events("nudge.result")), 1)
 
     # T5
-    def _unreported(self, tag):
+    def _unreported(self, tag, pin=False):
         c = self.reg("curator", "local_cur" + tag)
         self.warm(c)
+        if pin:      # 0.23.0 (gaps 3, 6): the pin is a dict entry and needs the holder first
+            self.h.wake_pin_apply("operator", {"curator": WP("curator")})
         s = self.reg(host="local_s" + tag)
         mid = self.send(s, "role:curator")["nudge"]["msg_id"]
         self.h.store.append("nudge.unreported", "system", {"msg": mid, "msg_id": mid, "by": s})
@@ -122,7 +125,8 @@ class T(C.Base):
         self.assertEqual([x["cond"] for x in D.alarm_scan(self.h, force=True) if x["msg_id"] == mid], ["unreported"])
 
     def test_t5_an_evidenced_relay_clears_the_unreported_alarm(self):
-        mid, relay = self._unreported("5b")
+        # 0.22.3 (A-8a3da item 4): the HTTP/cse form counts only on a message that had a trigger offer, so pin one
+        mid, relay = self._unreported("5b", pin=True)
         D.record_result(self.h, relay, mid, "delivered", "HTTP 200 " + RUN)
         self.assertEqual([x for x in D.alarm_scan(self.h, force=True) if x["msg_id"] == mid], [])
 

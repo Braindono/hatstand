@@ -12,13 +12,26 @@ All reads scan the ledger tail (bounded by the window), so a call costs O(recent
 import json, os, re, time
 
 OFFERS = ("nudge.offered", "nudge.sent")     # 0.21.1 (A-58ff8 item 4): the server event was renamed; the old name still counts as an offer
-OUTCOMES = ("delivered", "held", "skipped", "woke")      # 0.21.2 (item 1): "woke" = the sender fired the role's wake trigger
+OUTCOMES = ("delivered", "held", "skipped", "woke", "refused_by_app")   # 0.22.3: refused_by_app (relayer only); 0.21.2 (item 1): "woke" = the sender fired the role's wake trigger
+RELAY_OUTCOMES = ("delivered", "woke", "refused_by_app")   # 0.22.3 (A-8a3da item 1): the only outcomes a non-sender may report
+RELAY_ASK = ("no_sendmessage", "no_listagents")            # 0.22.3 (item 2): a sender skip with one of these asks for a relay
+RELAY_TTL_S = 1800                                         # 0.22.3: an offer unclaimed or unreported after 30 min becomes skipped relay_expired
+RELAY_CAP_S = 3600                                         # 0.22.3 (item 1): a relayer the app refused takes no claims for 60 min
+RELAY_TURN_S = 120                                         # 0.22.3 (item 3): round-robin turns hold for 2 min, then any holder may claim
+RELAY_CLAIM_S = 300                                        # 0.22.3b (critic blocker 1b): a claim with no report after 5 min goes to the next holder
+RELAY_ROLES = ("envoy", "curator", "ops-coder", "harness-critic", "design-coder")   # 0.22.3b (blocker 1a): default claimers (operator.json doorbell.relay_roles)
+RELAY_NEVER = ("steward",)                                 # 0.22.3b: the steward ignores every Do-line but register and reload (D-67610): never a claimer
+RELAY_PER_SENDER_HOUR = 30                                 # 0.22.3 (item 2): relay offers per sender per hour
+RELAY_NO_ALARM = ("read_before_relay",)                    # the recipient read the mail before any relay: nothing to alarm about
 NUDGE_KINDS = ("task", "question", "review", "handoff", "result")   # notice / plain message start no wake
 TERMINAL = ("completed", "failed", "canceled", "rejected")
 TRIG_NOT_URGENT = "Do not skip this step because the mail is not urgent."   # 0.22.2 (A-0ce70 item 1): fixed text, never from mail
 # 0.22.2 (A-0ce70 item 3): a relaying agent's report must carry evidence in its reason: an HTTP status and a run session id. Self-reported.
-_EV_HTTP = re.compile(r"(?<![0-9A-Za-z])([1-5][0-9]{2})(?![0-9A-Za-z])")
+_EV_HTTP = re.compile(r"(?<![0-9A-Za-z])([1-5][0-9]{2})(?![0-9A-Za-z])")   # acceptance of a relayer's evidence (unchanged); the status VALUE is fire_statuses
 _EV_SESSION = re.compile(r"(?<![0-9A-Za-z_])((?:cse|session)_[0-9A-Za-z]{6,64})(?![0-9A-Za-z_])")
+# 0.22.3 (A-8a3da item 4): a relayed nudge's evidence is the SendMessage result: its delivery state and the returned message UUID.
+_EV_DELIVERY = re.compile(r"delivery:\s*([a-z_]{3,20})", re.I)
+_EV_MSGID = re.compile(r"message_id:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![0-9A-Za-z-])")
 WAKE_TEXT = ("/listen: run harness_inbox, answer routine coordination only (no approvals, publishes, pins or "
              "archives, corpus_index pins or other gated ops), then harness_admin op=listen args={action:rearm} "
              "and re-arm only if it says rearm=true.")
@@ -60,6 +73,9 @@ def _opcfg(h):
     out["off"] = db.get("off") is True
     out["mute_roles"] = [x for x in (db.get("mute_roles") or []) if isinstance(x, str)] if isinstance(db.get("mute_roles"), list) else []
     out["listen_roles"] = [H.cr(x) for x in (ls.get("roles") or []) if isinstance(x, str)] if isinstance(ls.get("roles"), list) else []
+    rr = db.get("relay_roles")      # 0.22.3b: operator-owned (never the agent-writable config.json); the steward is never a claimer
+    out["relay_roles"] = [r for r in ([H.cr(x) for x in rr if isinstance(x, str)] if isinstance(rr, list) else list(RELAY_ROLES))
+                          if r not in RELAY_NEVER]
     return out
 
 
@@ -88,7 +104,7 @@ def _skip(h, frm, msg, to, reason):
 ID_KINDS = ("task", "review", "question", "approval", "handoff")   # 0.22.0 (item 6): action kinds wake by id; results only a warm chat
 ID_WAKE_MIN, ID_COLD_S = 30, 3600
 TRIG_WAKE_MIN = 10                      # 0.21.2 (item 1): at most 1 trigger wake per role and per trigger id per 10 min, over all senders
-TRIG_RE = re.compile(r"^trig_[A-Za-z0-9]{8,64}$")
+TRIG_RE = re.compile(r"^trig_[A-Za-z0-9]{8,64}\Z")
 TAIL_BYTES = 4 << 20                    # 0.21.2 (item 3): stale-id reads scan the last 4 MB of the ledger (~3,800 events at 1.1 KB each)
 
 
@@ -125,14 +141,132 @@ def _stale_marks(h, nbytes=TAIL_BYTES):
     return out
 
 
-def _wake_trigger(st, role):
-    """The role's wake trigger id from the latest operator-approved wake.pinned event (harness_admin op=wake_pin), or None. The wake.json
-    file is never read here (critic B1: any local agent can write it); an edit counts only after the operator pins it again. The format is
-    checked again on read."""
+WAKE_KINDS = ("recurring", "run_once")
+WAKE_PROMPT = ("Ball wake for role:{role}. Peek at the role's mail (as a role-less helper, never register the role), leave one line in the "
+               "role's mail saying a wake arrived, and stop.")   # 0.22.5 (item 3): the only prompt a wake trigger may carry; the role slug is the only variable
+_WAKE_ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}\Z")
+# 0.23.0 (A-08480 item 3 gaps 1 and 2): what counts as the status of a fire. (a) the 3-digit number after an HTTP form (HTTP 404, HTTP <404>,
+# HTTP status 404, HTTP error 500, HTTP code 403, http_status=404, HTTP-404, HTTP/2 404, HTTP/1.1 200, HTTPS 404); (b) a 4xx or 5xx number followed by a
+# status phrase. Any other number (took 350 ms, woke after 120 s) is not a status.
+_FIRE_HTTP = re.compile(r"\bHTTPS?(?:/[0-9](?:\.[0-9])?)?(?:[\s_:=<-]*(?:status|error|code))?[\s_:=<-]*([1-5][0-9]{2})(?![0-9])", re.I)
+_FIRE_PHRASE = re.compile(r"(?<![0-9A-Za-z])([45][0-9]{2})\s*(?:not found|server error|bad request|forbidden|unauthorized|timeout|error)\b", re.I)
+
+
+def fire_statuses(reason):
+    """The statuses a fire report names, in order of position; the reason is cut to 80 characters first."""
+    s = str(reason or "")[:80]
+    found = {}
+    for rx in (_FIRE_HTTP, _FIRE_PHRASE):
+        for m in rx.finditer(s):
+            found.setdefault(m.start(1), m.group(1))
+    return [found[k] for k in sorted(found)]
+
+
+def fire_spends(statuses):
+    """A `woke` spends a run_once pin when any status is 200 or none is named; it stays unspent only when statuses are named and none is 200."""
+    return not statuses or "200" in statuses
+
+
+def result_spends(d):
+    """For one nudge.result `woke`: the relayer's evidence status if it carries one, else the sender's reason."""
+    ev = d.get("evidence") or {}
+    if isinstance(ev.get("statuses"), list):          # 0.23.0 relayer evidence
+        return fire_spends([str(x) for x in ev["statuses"]])
+    if ev.get("http") is not None:                    # relayer evidence written before 0.23.0
+        return fire_spends([str(ev["http"])])
+    return fire_spends(fire_statuses(d.get("reason")))
+
+
+def wake_prompt(role):
+    return WAKE_PROMPT.format(role=role)
+
+
+def wake_prompt_ok(role, prompt):
+    """Equality with the template for this role (not a word list): any extra word, name or id is a different text. Self-reported by the
+    requester; the operator's comparison in the cloud UI is the real control."""
+    return isinstance(role, str) and bool(_WAKE_ROLE_RE.match(role)) and isinstance(prompt, str) and prompt.strip() == wake_prompt(role)
+
+
+def pin_entry(v):
+    """A wake.pinned entry as {trigger, kind, holder, prompt_sha, legacy}, or None. A plain `trig_...` string is a pin from before 0.22.5:
+    recurring, bound to no holder, prompt never checked (legacy)."""
+    if isinstance(v, str):
+        return {"trigger": v, "kind": "recurring", "holder": None, "prompt_sha": None, "legacy": True} if TRIG_RE.match(v) else None
+    if isinstance(v, dict) and isinstance(v.get("trigger"), str) and TRIG_RE.match(v["trigger"]) and v.get("kind") in WAKE_KINDS:
+        return {"trigger": v["trigger"], "kind": v["kind"], "holder": v.get("holder") or None, "prompt_sha": v.get("prompt_sha"), "legacy": False}
+    return None
+
+
+def _spent(st, trig, after_seq):
+    """True when a run_once pin's trigger has a REPORTED fire after the pin: a nudge.result outcome woke whose message was offered through this
+    trigger (nudge.trigwake) and that spends by fire_spends. 0.23.0 (gap 4): read from the State fold (State.trig_spent), never from the ledger
+    tail, so a spent pin stays spent however long the ledger grows. Self-reported evidence."""
+    return any(sq > after_seq for sq in (getattr(st, "trig_spent", None) or {}).get(trig, ()))
+
+
+def wake_pin_state(st, role, h=None):
+    """-> (entry or None, state): ok | stale (the pin's holder is not the role's current holder) | spent (run_once, fire reported with 200)."""
     pin = getattr(st, "wake_pin", None) or {}
     ent = pin.get("entries") if isinstance(pin, dict) else None
-    v = ent.get(role) if isinstance(ent, dict) and role else None
-    return v if isinstance(v, str) and TRIG_RE.match(v) else None
+    e = pin_entry(ent.get(role)) if isinstance(ent, dict) and role else None
+    if not e:
+        return None, "none"
+    if e["holder"] and e["holder"] != st.role_holder(role):
+        return e, "stale"
+    if e["kind"] == "run_once" and h is not None:
+        try:
+            if _spent(st, e["trigger"], int(pin.get("seq") or 0)):
+                return e, "spent"
+        except Exception:
+            pass
+    return e, "ok"
+
+
+def _wake_trigger(st, role, h=None):
+    """The role's wake trigger id from the latest operator-approved wake.pinned event (harness_admin op=wake_pin), or None. The wake.json
+    file is never read here (critic B1: any local agent can write it); an edit counts only after the operator pins it again. 0.22.5: a
+    stale pin (holder changed) or a spent run_once pin is left out."""
+    e, state = wake_pin_state(st, role, h)
+    return e["trigger"] if e and state == "ok" else None
+
+
+def wake_repin_lines(h, st, aid):
+    """Sync 'Changed' lines: which role needs a re-pin because its pin is stale or spent. Shown to the role's holder, the envoy and the curator."""
+    out = []
+    try:
+        mine = st.role_of(aid)
+        pin = getattr(st, "wake_pin", None) or {}
+        for role in sorted((pin.get("entries") or {}) if isinstance(pin, dict) else {}):
+            if mine not in (role, "envoy", "curator"):
+                continue
+            e, state = wake_pin_state(st, role, h)
+            if state in ("stale", "spent"):
+                why = "its holder changed" if state == "stale" else "its run-once trigger already fired"
+                out.append(f"wake pin for role:{role} is {state} ({why}): left out of nudges until the operator re-pins (harness_admin op=wake_pin)")
+    except Exception:
+        pass
+    return out[:4]
+
+
+def proctor_lines(h, st, aid, since=0):
+    """0.23.0 (A-08480 item 2): sync 'Changed' lines. The proctor holder sees its queue; anyone sees a count of case events the replay
+    rules did not apply, only when a new one appeared since its previous sync (never repeated)."""
+    out = []
+    try:
+        cases = getattr(st, "cases", None) or {}
+        if st.role_of(aid) == "proctor":
+            op = [c for c in cases.values() if not c["closed"]]
+            sev = lambda s_: sum(1 for c in op if c["severity"] == s_)
+            now = getattr(st, "now", time.time())
+            samples = sum(1 for sm in (getattr(st, "case_samples", None) or {}).values() if sm["expires_t"] > now)
+            out.append(f"proctor queue: {len(op)} open (S0 {sev('S0')}, S1 {sev('S1')}); shadow {'on' if st.shadow_on() else 'off'}; "
+                       f"samples open {samples}")
+        rej = getattr(st, "case_rejected", None) or []
+        if rej and rej[-1] > (since or 0):
+            out.append(f"rejected case events: {len(rej)} (newest seq {rej[-1]})")
+    except Exception:
+        pass
+    return out
 
 
 def _stale_ids(h):
@@ -198,6 +332,7 @@ def _do_one(hid, trig, line, mid):
                      + 'load the tool with ToolSearch select:RemoteTrigger if it is deferred; it runs under the Claude subscription, never '
                      'with an API key; no other trigger tool). ' + TRIG_NOT_URGENT + ' Then report outcome woke'
                      + (' instead of skipped.' if hid else ':' + rep)
+                     + ' Put "HTTP <status>" of the run in the reason.'
                      + ' No RemoteTrigger tool here: skip that step with reason no_remotetrigger.')
     return " ; ".join(parts) or None
 
@@ -237,7 +372,7 @@ def _pick_trig(h, st, rid, mid, now):
     from offers and written when OFFERED, since the harness cannot see whether the sender fired it; a sender reporting `delivered` (the
     SendMessage step rang, so no trigger ran) frees the slot (nudge.trigwake_released). Only reached after every existing cap passed."""
     role = st.role_of(rid)
-    trig = _wake_trigger(st, role)
+    trig = _wake_trigger(st, role, h)
     if not trig:
         return None
     since = now - TRIG_WAKE_MIN * 60
@@ -255,6 +390,18 @@ def _pick_trig(h, st, rid, mid, now):
     return trig
 
 
+def _live_recipients(st, m):
+    """Active or idle recipients of a message other than its sender: the direct ids plus the live holder of each role target."""
+    cand = list(m.get("to_resolved") or [])
+    for tgt in m.get("to") or []:
+        if isinstance(tgt, str) and tgt.startswith("role:"):
+            hid = st.role_holder(tgt[5:])
+            if hid:
+                cand.append(hid)
+    return [rid for rid in dict.fromkeys(cand) if rid not in ("human", "operator") and rid != m["from"]
+            and (st.agents.get(rid) or {}).get("status") in ("active", "idle")]
+
+
 def _attach(h, sender_ref, r):
     if not isinstance(r, dict) or not r.get("id"):
         return r
@@ -263,7 +410,12 @@ def _attach(h, sender_ref, r):
     m = st.messages.get(mid)
     if not m:
         return r
-    if m["from"] in ("human", "operator") or m["kind"] not in NUDGE_KINDS:
+    if m["from"] in ("human", "operator"):
+        return r
+    if m["kind"] not in NUDGE_KINDS:
+        # 0.23.0 (A-08480 item 4): a notice to a live recipient says it rings nobody; no event. Other non-ringing kinds are unchanged.
+        if m["kind"] == "notice" and _live_recipients(st, m):
+            return dict(r, nudge="none (kind notice starts no wake)")
         return r
     sender = m["from"]
     cfg = _opcfg(h)
@@ -423,15 +575,22 @@ def relay_evidence(reason):
     st = _EV_HTTP.search(rest)
     if not st:
         return None
-    return {"http": st.group(1), "session": m.group(1)}
+    # 0.23.0 (gap 2, critic m-9142613e2b12): acceptance stays as before; whether the fire spends a pin is decided by the same parse as a
+    # sender's reason, kept in `statuses` (so "took 200 ms HTTP 404 cse_..." does not spend)
+    return {"http": st.group(1), "session": m.group(1), "statuses": fire_statuses(rest)}
 
 
 def record_result(h, caller, msg_id, outcome, reason=None):
-    """harness_admin op=nudge_result {msg_id, outcome: delivered|held|skipped (woke accepted), reason}. A skipped result whose reason starts
-    stale_id marks the offer's app session ids stale (nudge.stale_id) until the recipient next calls the harness from that session. The sender
-    of the offered mail may report; 0.22.2 (A-0ce70 item 3): so may a relaying agent whose reason carries evidence (relay_evidence), recorded
-    with `by` (reporter) and `for` (the offer's sender) and `evidence` marked self-reported. One result per message (a second call answers
-    already_reported). A result counts even after the offer was flagged unreported."""
+    """harness_admin op=nudge_result {msg_id, outcome, reason}. A skipped result whose reason starts stale_id marks the offer's app session
+    ids stale (nudge.stale_id) until the recipient next calls the harness from that session. One result per message (a second call answers
+    already_reported). A result counts even after the offer was flagged unreported. Recorded with `by` (reporter) and `for` (the sender).
+    Who may report (0.22.3, A-8a3da):
+      * the sender: delivered, held, skipped or woke, as before. Its skipped no_sendmessage / no_listagents to a holder with a local_ id on
+        this machine asks for a relay (nudge.relay_offer) instead of filling the result slot (relay_requested).
+      * a relaying agent (any non-sender): only delivered, woke or refused_by_app (item 1). On a relayed message only the recorded claimer,
+        with the SendMessage `delivery:` state and `message_id:` UUID in its reason (item 4); refused_by_app releases the claim and caps
+        that relayer for 60 min. On a trigger-offered message the 0.22.2 HTTP status + cse_/session_ id form. Anyone else is refused.
+      Evidence is self-reported: the harness checks its shape and the claim, not the run."""
     import harness as H
     msg_id = str(msg_id or "").strip()
     if outcome not in OUTCOMES:
@@ -447,9 +606,32 @@ def record_result(h, caller, msg_id, outcome, reason=None):
     mine = set(st.lineage(caller)) | {caller}
     why = " ".join(str(reason or "").replace("\x00", " ").split())[:80]
     ev = None
-    if offer.get("from") not in mine:
-        ev = relay_evidence(why)      # 0.22.2 (A-0ce70 item 3): a relaying agent may report, only with evidence
-        if not ev:
+    if offer.get("from") in mine:
+        if outcome == "refused_by_app":
+            raise H.HarnessError("refused_by_app is a relaying agent's outcome; the sender reports skipped")
+        if outcome == "skipped" and why.lower().startswith(RELAY_ASK):
+            r = _request_relay(h, st, offer, msg_id, why)
+            if r:
+                _pop_pending(h, offer.get("from"), msg_id)
+                return r
+    else:
+        if outcome not in RELAY_OUTCOMES:
+            raise H.HarnessError("a relaying agent may report only " + ", ".join(RELAY_OUTCOMES) + " for %s" % msg_id)
+        rel = _relay_view(h, msg_id)
+        if rel["offer"]:
+            claim = rel["claim"]
+            if not claim or claim.get("by") not in mine:
+                raise H.HarnessError("only the sender of %s or its recorded relay claimer can report its nudge" % msg_id)
+            if outcome == "refused_by_app":
+                return _release_relay(h, caller, msg_id, why)
+            ev = delivery_evidence(why)
+            if not ev:
+                raise H.HarnessError("a relay report needs the SendMessage result in its reason: delivery: <state>; message_id: <uuid>")
+        elif any(offer.get("by_trigger") or []) and outcome != "refused_by_app":
+            ev = relay_evidence(why)      # 0.22.2 (A-0ce70 item 3): a trigger offer: HTTP status + run session id
+            if not ev:
+                raise H.HarnessError("only the sender of %s can report its nudge" % msg_id)
+        else:
             raise H.HarnessError("only the sender of %s can report its nudge" % msg_id)
     data = {"msg": msg_id, "msg_id": msg_id, "by": caller, "for": offer.get("from"), "outcome": outcome, "reason": why}
     if ev:
@@ -475,25 +657,274 @@ def record_result(h, caller, msg_id, outcome, reason=None):
                     h.store.append("nudge.stale_id", caller, {"msg_id": msg_id, "to": to, "host_session_id": hid})   # settle clears it
                 except Exception:
                     pass
+    _pop_pending(h, offer.get("from"), msg_id)
+    return {"msg_id": msg_id, "reported": True, "outcome": outcome}
+
+
+def _pop_pending(h, sender, msg_id):
     try:
-        p = _sp(h, offer.get("from"))
+        p = _sp(h, sender)
         d = _load(p)
         if msg_id in (d.get("pending") or {}):
             d["pending"].pop(msg_id, None)
             _save(p, d)
     except Exception:
         pass
-    return {"msg_id": msg_id, "reported": True, "outcome": outcome}
+
+
+# ---- 0.22.3 (A-8a3da): cloud-to-local nudge relay. A sender that cannot ring (a cloud or Cowork chat: no SendMessage / ListAgents) asks
+# for a relay by reporting its skip; the next harness call of a live local role holder on this machine claims it under the ledger lock and
+# gets one fixed-field SendMessage Do-line. Events: nudge.relay_offer, nudge.relay_claim, nudge.relay_released, nudge.relay_capped.
+
+def delivery_evidence(reason):
+    """The SendMessage result a relay claimer copies into its reason: `delivery: <state>; message_id: <uuid>`. The state must be
+    delivered. Self-reported: the harness checks the shape, not the app. -> {"delivery", "message_id"} or None."""
+    s = str(reason or "")
+    d, m = _EV_DELIVERY.search(s), _EV_MSGID.search(s)
+    if not (d and m) or d.group(1).lower() != "delivered":
+        return None
+    return {"delivery": "delivered", "message_id": m.group(1).lower()}
+
+
+def _relay_events(h):
+    return [e for e in _tail(h, needle=b'"nudge.relay_') if e.get("type") in
+            ("nudge.relay_offer", "nudge.relay_claim", "nudge.relay_released", "nudge.relay_capped")]
+
+
+def _relay_view(h, msg_id, evs=None):
+    """-> {"offer": data|None, "offer_t", "claim": data|None (the live claim: none after a release)}, from the ledger tail."""
+    out = {"offer": None, "offer_t": None, "claim": None, "claim_t": None, "timed_out": set()}
+    for e in (evs if evs is not None else _relay_events(h)):
+        d = e.get("data") or {}
+        if d.get("msg_id") != msg_id:
+            continue
+        if e["type"] == "nudge.relay_offer":
+            out.update(offer=d, offer_t=float(e.get("t") or 0), claim=None, claim_t=None)
+        elif e["type"] == "nudge.relay_claim":
+            out.update(claim=d, claim_t=float(e.get("t") or 0))
+        elif e["type"] == "nudge.relay_released":
+            if d.get("reason") == "claim_timeout" and d.get("claimer"):
+                out["timed_out"].add(d["claimer"])      # 0.22.3b: a silent claimer does not get the same message back
+            out.update(claim=None, claim_t=None)
+    return out
+
+
+def _results(h):
+    return {(e.get("data") or {}).get("msg_id") for e in _tail(h, needle=b'"nudge.result"') if e.get("type") == "nudge.result"}
+
+
+def _request_relay(h, st, offer, msg_id, why):
+    """Item 2: the sender's skip no_sendmessage / no_listagents. A relay is offered only to a recipient holding a role, with a local_ app
+    session id that is not marked stale, on this machine. Max RELAY_PER_SENDER_HOUR offers per sender. -> result dict, or None (record the
+    skip as an ordinary result)."""
+    sender = offer.get("from")
+    stale = _stale_ids(h)
+    target = None
+    for to, hid in zip(offer.get("to") or [], offer.get("hids") or []):
+        a = st.agents.get(to) or {}
+        if hid and hid.startswith("local_") and hid not in stale and st.role_of(to) and _same_machine(a, st):
+            target = (to, hid)
+            break
+    if not target:
+        return None
+    now = time.time()
+    evs = _relay_events(h)
+    if _relay_view(h, msg_id, evs)["offer"]:
+        return {"msg_id": msg_id, "relay_requested": True, "already": True}
+    if sum(1 for e in evs if e["type"] == "nudge.relay_offer" and (e.get("data") or {}).get("from") == sender
+           and float(e.get("t") or 0) >= now - 3600) >= RELAY_PER_SENDER_HOUR:
+        return None
+    m = st.messages.get(msg_id) or {}
+    role = st.role_of(sender) or "agent"
+    h.store.append("nudge.relay_offer", sender, {"msg_id": msg_id, "to": target[0], "to_session": target[1], "from": sender,
+                                                  "role": role, "thread": m.get("thread"), "reason": why})
+    return {"msg_id": msg_id, "relay_requested": True,
+            "note": "a live local role holder will ring the recipient for you; nothing else to do"}
+
+
+def _release_relay(h, caller, msg_id, why):
+    """Item 1: refused_by_app. The claim goes back to the pool and this relayer takes no claims for RELAY_CAP_S (or until it next reports
+    delivered). The result slot stays free."""
+    now = time.time()
+    h.store.append("nudge.relay_released", caller, {"msg_id": msg_id, "by": caller, "reason": why or "refused_by_app"})
+    h.store.append("nudge.relay_capped", "system", {"agent": caller, "until": round(now + RELAY_CAP_S, 3)})
+    return {"msg_id": msg_id, "reported": True, "outcome": "refused_by_app", "released": True}
+
+
+def _capped(h, aid, evs, now):
+    until = 0.0
+    for e in evs:
+        if e["type"] == "nudge.relay_capped" and (e.get("data") or {}).get("agent") == aid:
+            until = max(until, float((e.get("data") or {}).get("until") or 0))
+    if until <= now:
+        return False
+    since = until - RELAY_CAP_S
+    for e in _tail(h, needle=b'"nudge.result"'):     # a delivered report after the cap lifts it
+        d = e.get("data") or {}
+        if e.get("type") == "nudge.result" and d.get("by") == aid and d.get("outcome") == "delivered" and float(e.get("t") or 0) >= since:
+            return False
+    return True
+
+
+def relay_expire(h, now=None):
+    """An offer with no result RELAY_TTL_S after it was made becomes nudge.result skipped relay_expired (read_before_relay when the
+    recipient has read the mail), by system for the sender; the existing alarm then applies. Never raises. -> [msg ids]"""
+    out = []
+    try:
+        now = float(now if now is not None else time.time())
+        evs = _relay_events(h)
+        offers = [e for e in evs if e["type"] == "nudge.relay_offer"]
+        if not offers:
+            return out
+        done = _results(h)
+        st = None
+        for e in offers:
+            d = e.get("data") or {}
+            mid = d.get("msg_id")
+            if mid in done or now - float(e.get("t") or 0) < RELAY_TTL_S:
+                continue
+            st = st or h.state()
+            read = d.get("to") in ((st.messages.get(mid) or {}).get("read_by") or [])
+            data = {"msg": mid, "msg_id": mid, "by": "system", "for": d.get("from"), "outcome": "skipped",
+                    "reason": "read_before_relay" if read else "relay_expired"}
+
+            def _fresh(store, mid=mid):
+                for x in store.read_all()[-3000:]:
+                    if x.get("type") == "nudge.result" and ((x.get("data") or {}).get("msg_id") == mid):
+                        raise _Already()
+            try:
+                h.store.append("nudge.result", "system", data, precheck=_fresh)
+                out.append(mid)
+            except _Already:
+                pass
+            done.add(mid)
+    except Exception:
+        pass
+    return out
+
+
+def relay_do_line(to_session, msg_id, role, thread):
+    """Item 3: fixed fields only (ids from the ledger, the sender's ROLE, never a name, subject or body)."""
+    return (f'Do: SendMessage to {to_session}: Mail {msg_id} from {role}, thread {thread}. Run harness_inbox. (Relay for a sender that '
+            f'cannot ring; fixed fields only.) Then report: harness_admin op=nudge_result args={{msg_id:"{msg_id}",'
+            f'outcome:delivered|refused_by_app,reason:"delivery: <state>; message_id: <id from the SendMessage result>"}}. '
+            f'If the app refuses the send (its cross-session cap), report refused_by_app; the relay passes to another holder.')
+
+
+def claim_relay(h, caller, now=None):
+    """Item 3: called after each harness call of an agent. A live local role holder on this machine (not the recipient, not capped) whose
+    turn it is claims the oldest open offer under the ledger lock. Turn: among the warm eligible holders (a harness call in the last hour)
+    the one whose last claim is oldest goes first; a tie may claim. -> Do-line text or None. Never raises."""
+    try:
+        now = float(now if now is not None else time.time())
+        evs = _relay_events(h)
+        if not any(e["type"] == "nudge.relay_offer" and now - float(e.get("t") or 0) < RELAY_TTL_S for e in evs):
+            return None
+        relay_expire(h, now)
+        st = h.state()
+        me = st.agents.get(caller) or {}
+        allowed = set(_opcfg(h)["relay_roles"])
+        if not (st.role_of(caller) in allowed and (me.get("host_session_id") or "").startswith("local_") and _same_machine(me, st)):
+            return None
+        if _capped(h, caller, evs, now):
+            return None
+        done = _results(h)
+        last_claim = {}
+        for e in evs:
+            if e["type"] == "nudge.relay_claim":
+                last_claim[(e.get("data") or {}).get("by")] = float(e.get("t") or 0)
+        holders = [aid for aid in st.agents if st.role_of(aid) in allowed and aid != caller
+                   and ((st.agents[aid].get("host_session_id") or "").startswith("local_")) and _same_machine(st.agents[aid], st)]
+        for e in evs:
+            if e["type"] != "nudge.relay_offer":
+                continue
+            d = e.get("data") or {}
+            mid = d.get("msg_id")
+            if mid in done or now - float(e.get("t") or 0) >= RELAY_TTL_S:
+                continue
+            view = _relay_view(h, mid, evs)
+            if view["claim"] and now - (view["claim_t"] or now) >= RELAY_CLAIM_S:
+                old = view["claim"]
+
+                def _same(store, mid=mid, old=old):
+                    v = _relay_view(h, mid, [x for x in store.read_all()[-3000:] if x.get("type", "").startswith("nudge.relay_")])
+                    if v["claim"] != old:
+                        raise _Already()
+                    for x in store.read_all()[-3000:]:
+                        if x.get("type") == "nudge.result" and ((x.get("data") or {}).get("msg_id") == mid):
+                            raise _Already()
+                try:    # 0.22.3b (blocker 1b): no report 5 min after the claim: release it to the next holder
+                    h.store.append("nudge.relay_released", "system", {"msg_id": mid, "by": "system", "claimer": old.get("by"),
+                                                                      "reason": "claim_timeout"}, precheck=_same)
+                except _Already:
+                    continue
+                evs = _relay_events(h)
+                view = _relay_view(h, mid, evs)
+            if view["claim"] or caller in view["timed_out"]:
+                continue
+            recipient = d.get("to")
+            if caller == recipient or caller in set(st.lineage(recipient) or []) or me.get("host_session_id") == d.get("to_session"):
+                continue
+            if recipient in ((st.messages.get(mid) or {}).get("read_by") or []):
+                continue                                   # read already: nothing to ring (expiry records read_before_relay)
+            rivals = [aid for aid in holders if aid != recipient and not _capped(h, aid, evs, now)
+                      and (lambda la: la is not None and now - la <= ID_COLD_S)(_last_call(h, aid))]
+            mine_t = last_claim.get(caller, 0.0)
+            if now - float(e.get("t") or 0) < RELAY_TURN_S and any(last_claim.get(r, 0.0) < mine_t for r in rivals):
+                continue                                   # 0.22.3b (addendum item 3): another holder's turn for this offer; try later offers
+
+            def _free(store, mid=mid):
+                v = _relay_view(h, mid, [x for x in store.read_all()[-3000:] if x.get("type", "").startswith("nudge.relay_")])
+                if v["claim"]:
+                    raise _Already()
+                for x in store.read_all()[-3000:]:
+                    if x.get("type") == "nudge.result" and ((x.get("data") or {}).get("msg_id") == mid):
+                        raise _Already()
+            try:
+                h.store.append("nudge.relay_claim", caller, {"msg_id": mid, "by": caller, "to_session": d.get("to_session")},
+                               precheck=_free)
+            except _Already:
+                continue
+            return relay_do_line(d.get("to_session"), mid, d.get("role") or "agent", d.get("thread"))
+    except Exception:
+        return None
+    return None
+
+
+def _last_call(h, aid):
+    try:
+        v = _load(_sp(h, aid)).get("last_call")
+        return float(v) if v else None
+    except Exception:
+        return None
+
+
+def attach_relay(h, caller, r):
+    """Add a claimed relay Do-line to a harness result: appended to its text, or as `relay` in a JSON result. Claims only when the result
+    can carry it. Never raises."""
+    try:
+        if not isinstance(r, dict):
+            return r
+        line = claim_relay(h, caller)
+        if not line:
+            return r
+        if isinstance(r.get("text"), str):
+            return dict(r, text=r["text"] + "\n" + line)
+        return dict(r, relay=line)
+    except Exception:
+        return r
 
 
 def outcomes(events):
     """Counts for the weekly report and R5 from a list of ledger events: offers, the sender's reported outcomes, and offers with NO result,
     split in two (critic): PENDING = the sender has made no later call yet, UNREPORTED = a later call came and still no result. A result
     always wins over an unreported flag. -> dict"""
-    offers, results, unrep = {}, {}, set()
+    offers, results, unrep, refused = {}, {}, set(), {}
     for e in events:
         t, d = e.get("type"), e.get("data") or {}
         k = d.get("msg_id") or d.get("msg")
+        if t == "nudge.relay_capped" and d.get("agent"):      # 0.22.5 (item 4): written only when a relayer reports refused_by_app
+            refused[d["agent"]] = refused.get(d["agent"], 0) + 1
         if t in OFFERS and k:
             offers[k] = d
         elif t == "nudge.result" and k:
@@ -504,6 +935,7 @@ def outcomes(events):
     no_result = [k for k in offers if k not in results]
     flagged = [k for k in no_result if k in unrep]
     return {"offered": len(offers), "delivered": by["delivered"], "woke": by["woke"], "held": by["held"], "skipped_by_sender": by["skipped"],
+            "refused_by_app": sum(refused.values()), "refused_by_relayer": dict(sorted(refused.items())),
             "pending": len(no_result) - len(flagged), "unreported": len(flagged)}
 
 
@@ -731,6 +1163,7 @@ def alarm_scan(h, now=None, force=False):
         stamp["last"] = round(now, 3)
         _save(sp, stamp)
         cfg = _opcfg(h)
+        relay_expire(h, now)                         # 0.22.3: an expired relay offer becomes a skipped result before the alarm reads results
         st = h.state()
         evs = [e for e in _tail(h, needle=b'"nudge.') if e.get("type") in ("nudge.offered", "nudge.result", "nudge.unreported", "nudge.alarm", "nudge.alarm_armed")]
         if not any(e["type"] == "nudge.offered" and any((e.get("data") or {}).get("by_id") or []) and float(e.get("t") or 0) >= now - 86400
@@ -773,7 +1206,7 @@ def alarm_scan(h, now=None, force=False):
                 role = (d.get("roles") or [None] * (i + 1))[i] or st.role_of(rid)
                 res = results.get(mid) or {}
                 cond = reason = None
-                if res.get("outcome") == "skipped" and not _is_cap(res.get("reason")):
+                if res.get("outcome") == "skipped" and not _is_cap(res.get("reason")) and res.get("reason") not in RELAY_NO_ALARM:
                     cond, reason = "skipped", res.get("reason") or ""
                 elif mid in unrep and not res:
                     cond, reason = "unreported", "the sender made a later call and never reported"

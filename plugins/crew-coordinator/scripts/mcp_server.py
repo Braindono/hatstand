@@ -23,7 +23,7 @@ S, I, B, ARR = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}, {"t
 # Rules and patterns live in the protocol skill, loaded only when needed.
 ADMIN_OPS = ["whoami", "ledger", "thread", "status", "set_expertise", "task_update", "group", "retire",
              "set_project", "roster", "role_define", "role_assign", "release_scope", "wake_pin", "registry", "verify", "export", "reload", "health", "archive", "unarchive", "pin",
-             "approvals", "flag_release", "publish_release", "pin_corpus_index", "retag", "listen", "vault_write", "operator_script", "hatstand_sync", "lesson_curate", "concept_link", "concept_unlink", "recall_report", "notify_sent", "approvals_pending", "session_titled", "notify_undelivered", "nudge_result", "drift_explain"]
+             "approvals", "flag_release", "publish_release", "pin_corpus_index", "retag", "listen", "vault_write", "operator_script", "hatstand_sync", "lesson_curate", "concept_link", "concept_unlink", "recall_report", "notify_sent", "approvals_pending", "session_titled", "notify_undelivered", "nudge_result", "drift_explain", "case", "proctor_shadow"]
 # 0.12.1 (C-01dcf): allowed args per admin op; unknown keys are an error, never silently ignored.
 ADMIN_ARGS = {
     "whoami": set(), "ledger": {"active_only"}, "thread": {"thread"}, "status": {"path"},
@@ -43,6 +43,11 @@ ADMIN_ARGS = {
     "release_scope": {"plugin", "version", "items", "rationale", "approval_ref"},
     "wake_pin": set(),
     "drift_explain": {"code_sha", "reason"},
+    # 0.23.0 (A-08480 item 2): proctor case events; each action also rejects the keys it does not use (H.Harness.CASE_ARGS)
+    "case": {"action", "case", "source", "severity", "magnitude", "family", "summary", "subject", "rule_ids", "rationale", "diff", "cause",
+             "contributing", "owner", "to", "backlog_ref", "old", "new", "reason", "verdict", "of_seq", "outcome", "ref", "cases", "expires",
+             "sample"},
+    "proctor_shadow": {"on", "reason"},
     "retag": {"entry", "project", "role", "ref", "dry_run"},
     "listen": {"action"},
     "vault_write": {"dry_run"},
@@ -336,8 +341,9 @@ def admin(h, a):
             rows = h.approvals(False)
             return {"text": "\n".join(f"{r['id']} {r['state']}{' (used)' if r.get('consumed') else ''} {r['action']} caller={str(r.get('caller'))[:8]}"
                                       f" digest={r['args_digest'][:12]}" + (f" result: {H._clean_text(r.get('result'), 120)}" if r.get("result") else "")
+                                      + h.dup_note(r, " · ")
                                       for r in rows) or "no approval requests"}
-        return {"text": "\n".join(f"{r['id']} {r['action']} caller={str(r.get('caller'))[:8]} digest={r['args_digest'][:12]}"
+        return {"text": "\n".join(f"{r['id']} {r['action']} caller={str(r.get('caller'))[:8]} digest={r['args_digest'][:12]}" + h.dup_note(r, " · ")
                                   for r in h.approvals(True)) or "no pending approval requests"}
     if op == "lesson_curate":   # 0.19.0 (R-122 part 2): lint, then one no-expiry operator approval for the whole batch
         return h.lesson_curate_propose(ag, x.get("ids"), x.get("keys"))   # 0.20.0 item 5: keys = {lesson id: {paths, tools, mode}}
@@ -413,6 +419,13 @@ def admin(h, a):
                 raise H.HarnessError(f"release_scope: {k} required")
         return pend(h, h.resolve(h.state(), ag, follow=False), "release_scope",
                     {k: x.get(k) for k in ("plugin", "version", "items", "rationale", "approval_ref") if x.get(k) is not None})
+    if op == "case":   # 0.23.0 (A-08480 item 2): proctor case events, MCP only (no CLI write path)
+        return h.case_op(ag, x)
+    if op == "proctor_shadow":   # 0.23.0 (item 2): ending or restarting the proctor's shadow period is the operator's grant
+        pa = {"on": x.get("on")}
+        if x.get("reason"):
+            pa["reason"] = H._clean_text(x["reason"], 120)
+        return pend(h, caller_id(h, ag), "proctor_shadow", pa)
     if op == "drift_explain":   # 0.22.0 (gate spec D): the curator or envoy explains an unknown installed code sha
         return h.drift_explain(caller_id(h, ag), x.get("code_sha"), x.get("reason"))
     if op == "wake_pin":   # 0.21.2 (item 1, critic B1): snapshot wake.json into an approval; only the operator's grant writes wake.pinned
@@ -553,10 +566,17 @@ def _log_failed(h, name, a, err):
 
 def call(h, name, a):
     try:
-        return _call(h, name, a)
+        r = _call(h, name, a)
     except Exception as e:
         _log_failed(h, name, a, e)
         raise
+    if isinstance(a, dict) and a.get("agent") and not (name == "harness_admin" and a.get("op") == "nudge_result"):
+        try:    # 0.22.3 (A-8a3da item 3): a live local role holder's call may carry one relay Do-line for a sender that cannot ring
+            import doorbell
+            r = doorbell.attach_relay(h, h.resolve(h.state(), a["agent"], follow=False), r)
+        except Exception:
+            pass
+    return r
 
 
 def transcript_recall(h, a):
