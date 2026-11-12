@@ -14,3 +14,4 @@ description: "Use when: building, curating or publishing plugins and skills (ski
 - [global] P-107 Final ACCEPT of a release uses a second reviewer from another model family where available; canary the package to one role for a day first when practical (R-044).
 - [global] P-108 Release cadence (D-fffe6): the backlog accumulates in the register; the operator chooses one release per plugin per cycle; nobody cuts a release between cycles, a hotfix needs his approval; the publish check confirms the release matches the cycle (R-057).
 - [global] P-117 A GitHub repo the operator shares: inspect its code, compare it to our system, adapt the best parts in phases, never install it by default; leave notes and credit the source in the CHANGELOG (D-9d5a7).
+- [global] Plugin code, docs and runtime text state a rule and its reason in words, never a record id; ids go only in private commit messages.

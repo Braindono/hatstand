@@ -25,6 +25,9 @@ def make_home(terms=TERMS, ledger=True, terms_file=True):
     if terms_file:
         with open(os.path.join(home, "_harness", "data", G.TERMS_FILE), "w") as f:
             f.write("\n".join(terms) + "\n")
+    # 0.24.0 item 17: the guard also needs the identity list (synthetic values; tests/test_c240_item17.py covers it)
+    with open(os.path.join(home, "_harness", "data", G.IDENTITY_FILE), "w") as f:
+        f.write("user zzsynthuser\n")
     return home
 
 

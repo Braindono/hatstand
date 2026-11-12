@@ -274,9 +274,9 @@ class PublishCleanup(Base):
 class AllowedRoots(unittest.TestCase):
     def test_default_allowed_root_keeps_plugin_tree_keys_working(self):
         home = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, home, True)
-        ok = os.path.expanduser("~/Claude/Projects/Harness_Router/crew-coordinator/scripts/harness.py")
+        ok = os.path.expanduser(os.path.join("~", "Claude", "Projects", "Harness_Router", "crew-coordinator", "scripts", "harness.py"))
         self.assertEqual(H.disk_path(ok, home), ok)
-        for bad in ("/etc/passwd", os.path.expanduser("~/.ssh/id_rsa"), os.path.expanduser("~/Claude/Projects/../x")):
+        for bad in ("/etc/passwd", os.path.expanduser("~/.ssh/id_rsa"), os.path.expanduser(os.path.join("~", "Claude", "Projects", "..", "x"))):
             with self.assertRaises(H.HarnessError):
                 H.disk_path(bad, home)
 

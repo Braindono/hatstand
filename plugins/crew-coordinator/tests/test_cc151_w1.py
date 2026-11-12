@@ -292,7 +292,7 @@ class Approvals(Base):
         les = self.h.record(cur, "note", "Lesson: t", "What happened: x\nCause: y\nRule: Check twice", ["lesson", "role:all"])["id"]
         seen["lesson_curate"] = self.adm("lesson_curate", cur, ids=[les])   # 0.19.0 (R-122): no expiry, the operator decides
         self.assertIsNone(self.h._approval_records()[seen["lesson_curate"]["pending"]]["expires"])
-        seen["wake_pin"] = self.adm("wake_pin", cur)    # 0.21.2 (item 1, critic B1): the operator pins wake triggers
+        # 0.24.0 (A-b2950 item 13): wake_pin is no longer an approval action (D-8ef51); test_c240_item13 C6 checks the removal
         seen["proctor_shadow"] = self.adm("proctor_shadow", cur, on=False, reason="r")   # 0.23.0 (A-08480 item 2)
         x = self.adm("case", cur, action="open", source={"seq": 1}, severity="S2", magnitude={"recoverability": 1, "radius": 1, "cost": 1})["case"]
         seen["case_severity"] = self.adm("case", cur, action="request_severity", case=x, old="S2", new="S3", reason="r")

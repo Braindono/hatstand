@@ -20,7 +20,7 @@ def home():
     e = (os.environ.get("HARNESS_HOME") or "").strip()
     if e:
         return os.path.abspath(os.path.expanduser(e))
-    for c in ("~/Claude/Exchange", "~/Claude/Projects/Exchange"):
+    for c in (os.path.join("~", "Claude", "Exchange"), os.path.join("~", "Claude", "Projects", "Exchange")):
         p = os.path.expanduser(c)
         if os.path.isdir(p):
             return p

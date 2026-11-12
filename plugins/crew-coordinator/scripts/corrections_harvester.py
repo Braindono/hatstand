@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Corrections harvester (cc 0.17.0 stage 0, R-052 phase 2). Local script, zero model tokens.
 
-Reads ONLY the transcript indexer's vault (already redacted plain text, ~/Claude/Transcripts.noindex/*.md), never the
+Reads ONLY the transcript indexer's vault (already redacted plain text, <workspace>/Transcripts.noindex/*.md), never the
 raw ~/.claude/projects/*.jsonl. Flags operator messages that correct an agent, by fixed rules:
   * memory   - "remember this", "from now on", "going forward", "always ...", "never ..."
   * correct  - "you should have", "I told you", "I already asked", "not what I asked", "that's wrong", "why did you", "stop"
@@ -15,7 +15,7 @@ dropped (moved away) is never recreated.
 
   python3 corrections_harvester.py [--root VAULT] [--out DIR] [--since YYYY-MM-DD] [--dry-run]
 
-Default --out: <HARNESS_OPS_ROOT or ~/Claude/Code/harness-ops>/projects/skill-curation/eval-candidates
+Default --out: <HARNESS_OPS_ROOT or <workspace>/Code/harness-ops>/projects/skill-curation/eval-candidates
 --dry-run prints counts only (no text, no files)."""
 import argparse, collections, difflib, hashlib, json, os, re, sys, time
 
@@ -46,7 +46,7 @@ CONTEXT_CHARS = 600
 
 
 def ops_root():
-    return os.environ.get("HARNESS_OPS_ROOT") or os.path.expanduser("~/Claude/Code/harness-ops")
+    return os.environ.get("HARNESS_OPS_ROOT") or os.path.expanduser(os.path.join("~", "Claude", "Code", "harness-ops"))
 
 
 def parse_vault(path):

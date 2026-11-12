@@ -17,24 +17,28 @@ def entry(role, trig=TRIG, kind="run_once"):
     return {"trigger": trig, "kind": kind, "prompt": D.wake_prompt(role)}
 
 
+HONEST = {"on": False, "reason": "honest"}
+FORGED = {"on": True, "reason": "forged"}
+
+
 class Item1DuplicateId(C.Base):
+    # 0.24.0 (A-b2950 item 13): wake_pin, the action these tests used, is removed. The duplicate-id rule is the same for every action, so
+    # they use proctor_shadow, whose grant is just as visible (State.shadow_on).
     def setUp(self):
         super().setUp()
         self.sec = self.reg("secretary", "local_sec")
 
     def first(self):
-        r = self.h.request_approval(self.plain, "wake_pin", {"entries": {"secretary": entry("secretary")}})
+        r = self.h.request_approval(self.plain, "proctor_shadow", HONEST)
         return r["pending"]
 
-    def forge(self, i, trig=EVIL):
-        evil = {"entries": {"secretary": entry("secretary", trig)}}
-        self.h.store.append("approval.requested", self.plain, {"id": i, "action": "wake_pin", "args": evil,
-                                                               "args_digest": self.h.approval_digest("wake_pin", evil),
+    def forge(self, i):
+        self.h.store.append("approval.requested", self.plain, {"id": i, "action": "proctor_shadow", "args": FORGED,
+                                                               "args_digest": self.h.approval_digest("proctor_shadow", FORGED),
                                                                "caller": self.plain, "requested": 1, "expires": 9e9})
 
     def pinned(self):
-        ent = ((self.h.state().wake_pin or {}).get("entries") or {}).get("secretary")
-        return ent.get("trigger") if isinstance(ent, dict) else ent
+        return self.h.state().shadow_on()
 
     # T1 (critic probe p_appr.py test_4 as a regression)
     def test_t1_second_request_with_the_same_id_is_ignored(self):
@@ -46,8 +50,8 @@ class Item1DuplicateId(C.Base):
         self.assertEqual(rec["args_digest"], shown["args_digest"])
         self.assertEqual(len(rec["ignored_requests"]), 1)
         self.h.approve(i, code=shown["args_digest"][:4], tty=True)
-        self.assertEqual(self.pinned(), TRIG)
-        evil_code = self.h.approval_digest("wake_pin", {"entries": {"secretary": entry("secretary", EVIL)}})[:4]
+        self.assertIs(self.pinned(), False)                       # the honest args ran, not the forged ones
+        evil_code = self.h.approval_digest("proctor_shadow", FORGED)[:4]
         self.assertNotEqual(evil_code, shown["args_digest"][:4])
 
     def test_t1b_the_ignored_duplicate_is_shown(self):
@@ -149,9 +153,10 @@ class Item3Gaps(C.Base):
 
     def spend(self, reason, relay=False):
         self.holder()
-        self.h.wake_pin_apply("operator", {"secretary": entry("secretary")})
+        C.legacy_pin(self.h, {"secretary": entry("secretary")})
         mid = self.send(self.plain, "role:secretary")["nudge"]["msg_id"]
-        D.record_result(self.h, self.reg(host="local_relay") if relay else self.plain, mid, "woke", reason)
+        # 0.24.0 (A-b2950 item 3): free-text reasons are refused when reported; these 0.23.0 rows replay as 0.23.0 ledger events
+        C.record_v023(self.h, self.reg(host="local_relay") if relay else self.plain, mid, "woke", reason)
         return D.wake_pin_state(self.h.state(), "secretary", self.h)[1]
 
     # G1
@@ -186,22 +191,6 @@ class Item3Gaps(C.Base):
         self.assertEqual(self.spend("HTTP 200 " + RUN, relay=True), "spent")
 
     # G3
-    def test_g3_vacant_role_is_refused_at_request_time_and_says_how(self):
-        with self.assertRaisesRegex(H.HarnessError, r"role secretary has no live holder.*wake\.py clear secretary"):
-            self.h.request_approval(self.plain, "wake_pin", {"entries": {"secretary": entry("secretary")}})
-        self.holder("curator", "local_cur")
-        with self.assertRaisesRegex(H.HarnessError, "role secretary has no live holder"):    # the whole request, not an ignored list
-            self.h.request_approval(self.plain, "wake_pin", {"entries": {"curator": entry("curator"), "secretary": entry("secretary")}})
-
-    def test_g3_a_holder_who_leaves_before_the_grant_makes_the_apply_refuse(self):
-        self.holder()
-        r = self.h.request_approval(self.plain, "wake_pin", {"entries": {"secretary": entry("secretary")}})
-        self.h.role_assign("operator", "secretary", None, vacate=True)
-        out = self.h.approve(r["pending"], code=self.h._approval_records()[r["pending"]]["args_digest"][:4], tty=True)
-        self.assertEqual(out["state"], "failed")
-        self.assertIn("no live holder", out["result"])
-        self.assertEqual(self.events("wake.pinned"), [])
-
     # G4
     def test_g4_a_spent_pin_stays_spent_after_5_mb_of_later_events(self):
         self.assertEqual(self.spend("HTTP 200"), "spent")
@@ -213,7 +202,7 @@ class Item3Gaps(C.Base):
     def test_g4_full_rebuild_and_incremental_path_agree(self):
         with mock.patch.dict(os.environ, {"HARNESS_STATE_CACHE": "1"}):
             self.holder()
-            self.h.wake_pin_apply("operator", {"secretary": entry("secretary")})
+            C.legacy_pin(self.h, {"secretary": entry("secretary")})
             self.h.state()                                                              # cache built here
             mid = self.send(self.plain, "role:secretary")["nudge"]["msg_id"]
             D.record_result(self.h, self.plain, mid, "woke", "HTTP 200")
@@ -275,26 +264,11 @@ class Item3Gaps(C.Base):
                 self.assertEqual(len(r.stderr.strip().splitlines()), 1, r.stderr)
 
     # G6
-    def test_g6_plain_string_pin_is_refused_at_request_and_apply(self):
-        self.holder()
-        with self.assertRaisesRegex(H.HarnessError, "plain trig_ string is no longer accepted"):
-            self.h.request_approval(self.plain, "wake_pin", {"entries": {"secretary": TRIG}})
-        with self.assertRaisesRegex(H.HarnessError, "plain trig_ string is no longer accepted"):
-            self.h.wake_pin_apply("operator", {"secretary": TRIG})
-
     def test_g6_wake_py_set_without_a_prompt_file_refuses(self):
         r = self.run_wake(WAKE_PY, ["set", "secretary", TRIG], self.home)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("plain trig_ pin is no longer accepted", r.stderr)
         self.assertFalse(os.path.exists(os.path.join(self.home, "_harness", "wake.json")))
-
-    def test_g6_the_card_names_the_roles_that_lose_their_pin(self):
-        self.holder()
-        self.holder("curator", "local_cur")
-        self.h.wake_pin_apply("operator", {"secretary": entry("secretary"), "curator": entry("curator")})
-        r = self.h.request_approval(self.plain, "wake_pin", {"entries": {"secretary": entry("secretary")}})
-        self.assertIn("roles that lose their pin: curator", r["note"])
-        self.assertNotIn("legacy pin", r["note"])
 
     def test_g6_guard_a_legacy_string_pin_already_in_the_ledger_still_reads(self):
         self.holder()

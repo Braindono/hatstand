@@ -25,7 +25,7 @@ description: "Use when: writing or editing resumes and cover letters, or publish
 - [project:cv-management] P-64 Open drafts as a side-panel Claude Doc; apply edits to the draft file.
 - [project:cv-management] P-74 Resumes to CV_Management/Claude outputs/resumes/<YYYY-MM-DD>/<Company>/ (untailored: Base): pdf, docx, html, _build/.
 - [project:cv-management] P-75 Letters to .../letters/<YYYY-MM-DD>/<Company>/, .md beside pdf.
-- [project:cv-management] P-76 Filenames start with btf_, never Brian_Frederick_.
+- [project:cv-management] P-76 Filename prefix: the cv-management filename note.
 - [project:cv-management] P-77 Superseded files to resumes/ or letters/_archive; never delete.
 - [project:cv-management] P-78 Listings: listings_dir/<YYYY-MM-DD>/<company>-<slug>.md, one top-level manifest.md.
 - [project:cv-management] P-79 Skills JSON at top of CV_Management/; several files in CV_Management/operator stats/.

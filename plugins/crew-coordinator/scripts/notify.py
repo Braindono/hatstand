@@ -118,7 +118,7 @@ def build_text(who, kind, ids, subject=None, approval=None, extra=0):
         head = "%s: result %s on thread %s" % (who, clean(ids.get("ref"), 16), clean(ids.get("thread"), 16))
     else:
         head = "%s: %s %s for you" % (who, "question" if ids.get("question") else "mail", clean(ids.get("ref"), 16))
-    tail = (" +%d more" % extra) if extra else ""
+    tail = (" +%d more notifications" % extra) if extra else ""      # 0.24.0 (A-b2950 item 8.1)
     subj = clean(subject, SUBJECT_MAX)
     room = TEXT_MAX - len(head) - len(tail)
     if subj and room >= 8:
@@ -136,10 +136,31 @@ def _window(h, now):
         t = e.get("t")
         if t is not None and t < ref - WINDOW_DAYS * 86400:
             break
-        if e.get("type") in ("notify.queued", "notify.sent"):
+        if e.get("type") in ("notify.queued", "notify.sent", "notify.listed"):
             out.append(e)
     out.reverse()
     return out
+
+
+# 0.24.0 (A-b2950 item 8.2): a queued notification expires only when BOTH hold: the secretary's digest has listed it (notify.listed, written
+# by the secretary with harness_admin op=notify_listed; sync and restore lines never write it) and it is more than a day old. A Friday-evening
+# row never pushed still reaches the Monday digest. Approval rows keep their own expiry rule. Nothing is deleted (append-only).
+LISTED_EXPIRE_S = 86400
+
+
+def _listed(evs):
+    """-> (ids listed by the secretary's digest, ids whose drop line the digest already carried)."""
+    listed, carried = set(), set()
+    for e in evs:
+        if e.get("type") == "notify.listed":
+            d = e.get("data") or {}
+            listed.update(x for x in d.get("ids") or [] if isinstance(x, str))
+            carried.update(x for x in d.get("dropped") or [] if isinstance(x, str))
+    return listed, carried
+
+
+def _expired(d, listed, now):
+    return d.get("kind") != "approval" and d.get("id") in listed and now - float(d.get("at") or now) > LISTED_EXPIRE_S
 
 
 def _fold(evs):
@@ -177,8 +198,9 @@ def decide(h, trig, now=None):
         rep = store._repair_tail()
         if rep:
             store._append_locked("log.repaired", "system", rep)
-        q, sent, carrier, dropped_ids = _fold(_window(h, now))
-        released = set(carrier) | dropped_ids
+        evs = _window(h, now)
+        q, sent, carrier, dropped_ids = _fold(evs)
+        released = set(carrier) | dropped_ids | {i for i, d in q.items() if _expired(d, _listed(evs)[0], now)}   # 0.24.0 item 8.2: never batched
         if kind != "approval":
             cut = now - cfg["dedupe_minutes"] * 60
             key = (trig.get("thread"), kind)
@@ -310,12 +332,14 @@ def undelivered(h, now=None):
     digest reads the details from the ledger by id (notify.queued)."""
     now = float(now if now is not None else time.time())
     cfg = policy(h)
-    q, sent, carrier, dropped = _fold(_window(h, now))
+    evs = _window(h, now)
+    q, sent, carrier, dropped = _fold(evs)
+    listed = _listed(evs)[0]
     wait = cfg["digest_after_minutes"] * 60
     st = h.state()
     out = []
     for i, d in sorted(q.items(), key=lambda kv: kv[1].get("at", 0)):
-        if i in sent or i in dropped:
+        if i in sent or i in dropped or _expired(d, listed, now):      # 0.24.0 item 8.2: listed and over a day old
             continue
         c = q.get(carrier.get(i)) if i in carrier else None
         if c is not None and c["id"] in sent:
@@ -327,3 +351,49 @@ def undelivered(h, now=None):
             continue
         out.append({"id": i, "kind": d.get("kind"), "role": _who(st, d.get("actor")), "age_minutes": max(0, int((now - (d.get("at") or now)) // 60))})
     return out
+
+
+def dropped(h, now=None):
+    """0.24.0 (A-b2950 item 8.3): queued rows that expired (listed and over a day old) without delivery and whose drop the secretary's digest
+    has not carried yet. Fixed fields only. -> (line or None, ids). The line is shown until the secretary's next notify_listed records it."""
+    now = float(now if now is not None else time.time())
+    evs = _window(h, now)
+    q, sent, carrier, drop_ids = _fold(evs)
+    listed, carried = _listed(evs)
+    rows = []
+    for i, d in sorted(q.items(), key=lambda kv: kv[1].get("at", 0)):
+        if i in sent or i in drop_ids or i in carried or (i in carrier and carrier[i] in sent) or not _expired(d, listed, now):
+            continue
+        rows.append((i, "%s %s" % (clean(d.get("kind"), 12) or "-", clean(d.get("thread"), 16) or "-")))
+    if not rows:
+        return None, []
+    return "dropped (listed, over a day old): " + ", ".join(r[1] for r in rows), [r[0] for r in rows]
+
+
+def mark_listed(h, caller, ids, now=None):
+    """harness_admin op=notify_listed args={ids}: the secretary records that its digest carried these rows (notify.listed {ids, by,
+    dropped}). Only the role secretary may; any other caller is refused. Each id is written once; `dropped` records the drop line the same
+    digest carried, so it is shown once. Sync and restore lines never call this."""
+    import harness as H
+    st = h.state()
+    if st.role_of(caller) != "secretary":
+        raise H.HarnessError("notify_listed: only the role secretary records that its digest listed a notification")
+    ids = [str(x).strip() for x in (ids if isinstance(ids, list) else str(ids or "").replace(",", " ").split()) if str(x).strip()][:200]
+    now = float(now if now is not None else time.time())
+    evs = _window(h, now)
+    q = _fold(evs)[0]
+    listed = _listed(evs)[0]
+    unknown = [i for i in ids if i not in q]
+    new = [i for i in dict.fromkeys(ids) if i in q and i not in listed]
+    _line, drop = dropped(h, now)
+    if not new and not drop:
+        return {"listed": [], "already": [i for i in ids if i in listed], "unknown": unknown}
+
+    def _fresh(store):
+        if _listed([e for e in store.read_all()[-400:]])[0] & set(new):
+            raise _AlreadySent()
+    try:
+        h.store.append("notify.listed", caller, {"ids": new, "by": caller, "dropped": drop}, precheck=_fresh)
+    except _AlreadySent:
+        return {"listed": [], "already": new, "unknown": unknown}
+    return {"listed": new, "dropped": drop, "unknown": unknown}

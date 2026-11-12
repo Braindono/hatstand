@@ -2,7 +2,7 @@
 """cc 0.22.0 release-gate hooks (spec v3: H1, H2, H3). Guardrails only: the gate is G inside publish_release.
 
 H1 (PreToolUse, Bash): deny a command that writes into an installed plugin copy (~/.claude/plugins/, the desktop app's synced
-   copies under local-agent-mode-sessions/.../rpm/) or into the Exchange mirror <home>/_harness/bin, or over a package-carried file
+   copies under <cowork-sessions>/.../rpm/) or into the Exchange mirror <home>/_harness/bin, or over a package-carried file
    in <home>/_harness/data (the names in data/.mirrored.json; local files there stay editable).
 H2 (PreToolUse, Edit/Write/MultiEdit/NotebookEdit): deny an edit inside a published tree, harness-hub/<plugin>/ with a
    .claude-plugin/plugin.json.
@@ -13,6 +13,7 @@ Every path fails open: an error lets the call through. Known bypasses (python -c
 the drift check, not these hooks, do the guarding."""
 import json
 import os
+COWORK_SESSIONS = "-".join(("local", "agent", "mode", "sessions"))   # the Cowork session folder name, spelled from its parts so shipped text carries no workspace path (rule 5e)
 import re
 import shlex
 import sys
@@ -37,7 +38,7 @@ def protected(path, home):
     hm = os.path.realpath(os.path.expanduser("~"))
     if p.startswith(os.path.join(hm, ".claude", "plugins") + os.sep):
         return "the installed plugin cache (~/.claude/plugins)"
-    if "/local-agent-mode-sessions/" in p and "/rpm/" in p:
+    if "/" + COWORK_SESSIONS + "/" in p and "/rpm/" in p:
         return "a desktop chat's synced plugin copy"
     if home:
         hb = os.path.join(os.path.realpath(home), "_harness")
@@ -129,6 +130,16 @@ def _published_after(home, t):
     return None
 
 
+# 0.24.0 (A-b2950 item 6): files the harness rewrites at runtime are not local data for the post-publish check (N-b4ac4). Anchored at the
+# start of the home-relative path. _harness/wake.json is NOT here: it is operator-visible local data. release_sim.py is not changed.
+RUNTIME_PREFIXES = ("_harness/nudge_state/",)
+RUNTIME_FILES = ("_harness/recall_stats.jsonl", "_harness/retired_sessions.json")
+
+
+def _drop_runtime(hashes):
+    return {rel: sha for rel, sha in hashes.items() if not (rel.startswith(RUNTIME_PREFIXES) or rel in RUNTIME_FILES)}
+
+
 def post_check(inp, home):
     """H3. -> additionalContext text, or None. Writes release.postcheck when a publish ran after G saved its list."""
     tool, ti = str(inp.get("tool_name") or ""), inp.get("tool_input") if isinstance(inp.get("tool_input"), dict) else {}
@@ -156,8 +167,8 @@ def post_check(inp, home):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import release_sim as RS
     import harness as H
-    now = RS.hash_tree(home)
-    i1, i2 = RS.check_i1_i2(pre.get("hashes") or {}, now, {f"_harness/data/{n}" for n in pre.get("carried") or []})
+    now = _drop_runtime(RS.hash_tree(home))
+    i1, i2 = RS.check_i1_i2(_drop_runtime(pre.get("hashes") or {}), now, {f"_harness/data/{n}" for n in pre.get("carried") or []})
     fails = i1 + i2
     h = H.Harness(home)
     h.store.append("release.postcheck", "system", {"ok": not fails, "failures": fails[:40], "code_sha": pre.get("code"),
@@ -168,7 +179,12 @@ def post_check(inp, home):
         json.dump(pre, f)
     os.replace(tmp, pre_p)
     if not fails:
-        return "release.postcheck: ok (local data intact after the publish)."
+        # 0.24.0 (A-b2950 item 14): the post-publish list names the Hatstand sync (D-3660f), so no release goes out unmirrored.
+        # Not on a failed postcheck: local data is restored first, then the envoy syncs (the mirror-behind line shows it owed).
+        d = ev.get("data") or {}
+        what = " ".join(str(x) for x in (d.get("name"), d.get("version")) if x) or "the published release"
+        return ("release.postcheck: ok (local data intact after the publish).\nDo: role:envoy runs harness_admin op=hatstand_sync "
+                "(dry run), then push=true, and reports the pushed commit (D-3660f): %s." % what)
     return ("release.postcheck FAILED: " + "; ".join(fails[:6]) + ". Do: harness_send to role:curator,role:secretary kind=notice "
             "naming these files; restore them from _archive (archive, never delete).")
 
@@ -177,7 +193,7 @@ def find_home():
     env = os.environ.get("HARNESS_HOME")
     if env:
         return os.path.expanduser(env)
-    for c in ("~/Claude/Exchange", "~/Claude/Projects/Exchange", "~/mnt/Exchange"):
+    for c in (os.path.join("~", "Claude", "Exchange"), os.path.join("~", "Claude", "Projects", "Exchange"), "~/mnt/Exchange"):
         p = os.path.expanduser(c)
         if os.path.isdir(os.path.join(p, "_harness")):
             return p

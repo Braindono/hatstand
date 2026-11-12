@@ -17,7 +17,7 @@ class T(C.Base):
     def pinned_secretary(self, host=None):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": ""}):
             a = self.reg("secretary", host)
-        self.h.wake_pin_apply("operator", {"secretary": WP("secretary")})     # 0.23.0 (gaps 3, 6): dict form, holder registered first
+        C.legacy_pin(self.h, {"secretary": WP("secretary")})     # 0.23.0 (gaps 3, 6): dict form, holder registered first
         return a
 
     def report(self, who, mid, outcome="woke", reason=""):
@@ -92,7 +92,8 @@ class T(C.Base):
     def test_t4_the_sender_reports_as_before_without_evidence(self):
         self.pinned_secretary()
         mid = self.send(self.plain, "role:secretary")["nudge"]["msg_id"]
-        r = self.report(self.plain, mid, outcome="skipped", reason="no_remotetrigger")
+        # 0.24.0 (item 18 fix round 2): no_remotetrigger now asks for a relay through the ok legacy pin; a skip that records a result
+        r = self.report(self.plain, mid, outcome="skipped", reason="stale_id")
         self.assertTrue(r.get("reported"), r)
         ev = self.events("nudge.result")[-1]["data"]
         self.assertEqual((ev["by"], ev["for"]), (self.plain, self.plain))
@@ -103,7 +104,7 @@ class T(C.Base):
         mid = self.send(self.plain, "role:secretary")["nudge"]["msg_id"]
         relay = self.reg(host="local_envoy")
         self.assertTrue(self.report(relay, mid, reason="HTTP 200 " + RUN).get("reported"))
-        self.assertTrue(self.report(self.plain, mid, outcome="skipped", reason="x").get("already_reported"))
+        self.assertTrue(self.report(self.plain, mid, outcome="skipped", reason="stale_id").get("already_reported"))   # 0.24.0 item 5 R1: a listed reason
         self.assertEqual(len(self.events("nudge.result")), 1)
 
     # T5
@@ -111,7 +112,7 @@ class T(C.Base):
         c = self.reg("curator", "local_cur" + tag)
         self.warm(c)
         if pin:      # 0.23.0 (gaps 3, 6): the pin is a dict entry and needs the holder first
-            self.h.wake_pin_apply("operator", {"curator": WP("curator")})
+            C.legacy_pin(self.h, {"curator": WP("curator")})
         s = self.reg(host="local_s" + tag)
         mid = self.send(s, "role:curator")["nudge"]["msg_id"]
         self.h.store.append("nudge.unreported", "system", {"msg": mid, "msg_id": mid, "by": s})

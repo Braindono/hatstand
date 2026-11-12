@@ -267,6 +267,7 @@ class SyncScript(unittest.TestCase):
         git("push", "-q", self.bare, "main", cwd=seed)
         self.env = dict(os.environ, HARNESS_HOME=self.home, HATSTAND_REPO="file://" + self.bare,
                         GIT_CONFIG_GLOBAL=os.path.join(self.tmp, "gitconfig"))
+        _env.hatstand_hooks(self.tmp, self.home, self.env["GIT_CONFIG_GLOBAL"])     # 0.24.0 item 17: hooks on, as installed
 
     def run_sync(self, push=False):
         script = os.path.join(HERE, "..", "scripts", "hatstand-sync.sh")
@@ -331,20 +332,17 @@ class SyncScript(unittest.TestCase):
                                    capture_output=True, text=True, env=env)
                 self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
                 self.assertIn("STOP", r.stderr)
+                self.assertNotIn("hooks self-check", r.stderr)          # the guard stopped it, not a missing hook
         self.assertEqual(self.head(), h0)
 
-    def test_title_check_runs_without_harness_home(self):
-        """critic N2: run directly, the script passes its home to the guard."""
-        home = os.path.join(self.tmp, "Claude", "Projects", "Exchange")
-        os.makedirs(os.path.dirname(home))
-        os.rename(self.home, home)
-        self.mk = os.path.join(home, "_harness", "marketplace")
+    def test_without_harness_home_the_sync_stops(self):
+        """0.24.0 item 17 (rule 5e): the script has no built-in home path any more; without HARNESS_HOME nothing is pushed."""
+        h0 = self.head()
         self.env = {k: v for k, v in self.env.items() if k != "HARNESS_HOME"}
-        self.env["HOME"] = self.tmp
-        self.plant("docs/notes.md", "notes\n" + self.title + "\n")
-        code, out = self.run_sync()
+        code, out = self.run_sync(push=True)
         self.assertEqual(code, 1, out)
-        self.assertIn("corpus title", out)
+        self.assertIn("HARNESS_HOME is not set", out)
+        self.assertEqual(self.head(), h0)
 
     def stub_git(self, fail):
         """A git on PATH that fails only the named call and passes everything else to the real git."""
@@ -352,8 +350,8 @@ class SyncScript(unittest.TestCase):
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "git"), "w") as f:
             f.write('#!/bin/sh\n'
-                    'case " $* " in *" --name-only -z "*) [ "$STUB_FAIL" = names ] && exit 1;; esac\n'
-                    'case " $* " in *" -U0 "*) [ "$STUB_FAIL" = diff ] && exit 1;; esac\n'
+                    'case " $* " in *" --raw -z "*) [ "$STUB_FAIL" = names ] && exit 1;; esac\n'
+                    'case " $* " in *" cat-file --batch"*) [ "$STUB_FAIL" = diff ] && exit 1;; esac\n'
                     'exec "%s" "$@"\n' % GIT)
         os.chmod(os.path.join(d, "git"), 0o755)
         self.env = dict(self.env, PATH=d + os.pathsep + self.env.get("PATH", ""), STUB_FAIL=fail)
@@ -365,16 +363,17 @@ class SyncScript(unittest.TestCase):
         self.stub_git("names")
         code, out = self.run_sync(push=True)
         self.assertNotEqual(code, 0, out)
-        self.assertIn("could not list the staged files", out)
+        self.assertIn("checker: git diff failed", out)                     # 0.24.0 item 17: the checker lists the staged blobs
         self.assertEqual(self.head(), h0)
 
-    def test_failing_git_diff_stops_the_secret_scan(self):
+    def test_failing_blob_reader_stops_the_check(self):
+        """0.24.0 item 17: the checker reads staged blobs with git cat-file; if that fails, every name is a STOP."""
         h0 = self.head()
         self.plant("leak.txt", "value " + "gh" + "p_" + "x" * 36 + "\n")
         self.stub_git("diff")
         code, out = self.run_sync(push=True)
         self.assertNotEqual(code, 0, out)
-        self.assertIn("git diff failed", out)
+        self.assertIn("staged file the guard cannot read", out)
         self.assertEqual(self.head(), h0)
 
     def test_stub_passes_other_calls(self):
@@ -388,7 +387,7 @@ class SyncScript(unittest.TestCase):
                 self.plant("leak.txt", "value " + leak + "\n")
                 code, out = self.run_sync()
                 self.assertEqual(code, 1, out)
-                self.assertIn("secret pattern", out)
+                self.assertIn("rule 5d credential", out)                  # 0.24.0 item 17: the patterns moved to the guard
 
     def test_task_words_are_not_secrets(self):
         self.plant("notes.md", "see task-notification-handling-rules and ask-for-approval-before-publishing\n")

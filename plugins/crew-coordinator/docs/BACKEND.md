@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Current backend | `filesystem-jsonl`: one hash-chained `~/Claude/Exchange/_harness/events.jsonl` (before 0.18.0: `~/Claude/Projects/Exchange`) guarded by an advisory `flock` |
+| Current backend | `filesystem-jsonl`: one hash-chained `<workspace>/Exchange/_harness/events.jsonl` (before 0.18.0: `<workspace>/Projects/Exchange`) guarded by an advisory `flock` |
 | Status | **INTERIM.** Approved as the easiest path to a working system. Not the long-term design. |
 | Flag locations | `BACKEND_STATUS` in `scripts/harness.py`, the MCP server `instructions`, every ledger result, and the dashboard header badge |
 
@@ -69,9 +69,9 @@ python3 scripts/harness.py verify           # must be ok=true before migrating
 
 ## Transcript indexer (0.16.2)
 
-- Operator commands (shell): `python3 ~/Claude/scripts/transcript_indexer.py install | uninstall | status | search <terms> | spotlight off | purge --session <id>|--all --yes`. Install once; the launch agent keeps it running at low priority. The first run needs sessions to be allowed: registered chats are allowed automatically (ledger), others only if their session id is on a line of `~/Claude/Transcripts.noindex/.allow`.
-- Files: vault `~/Claude/Transcripts.noindex/*.md` (0600, directory 0700), index and state `~/.cache/harness-indexer/` (0700). The index is derived: `rebuild` recreates it from the vault. Nothing is ever sent anywhere.
-- Spotlight (0.17.0): the `.noindex` folder name keeps the vault out of Spotlight; the `.metadata_never_index` marker alone is ignored on macOS 26.7.1. `install` unloads the agent, renames an old `~/Claude/Transcripts` to the new root (never copies or deletes), leaves a symlink at the old path for one release, and pins the root in the plist (`INDEXER_ROOT`). `spotlight off` writes the marker, then probes with mdfind (`--probe-seconds`, default 30) and warns if Spotlight still finds a new file there.
+- Operator commands (shell): `python3 <workspace>/scripts/transcript_indexer.py install | uninstall | status | search <terms> | spotlight off | purge --session <id>|--all --yes`. Install once; the launch agent keeps it running at low priority. The first run needs sessions to be allowed: registered chats are allowed automatically (ledger), others only if their session id is on a line of `<workspace>/Transcripts.noindex/.allow`.
+- Files: vault `<workspace>/Transcripts.noindex/*.md` (0600, directory 0700), index and state `~/.cache/harness-indexer/` (0700). The index is derived: `rebuild` recreates it from the vault. Nothing is ever sent anywhere.
+- Spotlight (0.17.0): the `.noindex` folder name keeps the vault out of Spotlight; the `.metadata_never_index` marker alone is ignored on macOS 26.7.1. `install` unloads the agent, renames an old `<workspace>/Transcripts` to the new root (never copies or deletes), leaves a symlink at the old path for one release, and pins the root in the plist (`INDEXER_ROOT`). `spotlight off` writes the marker, then probes with mdfind (`--probe-seconds`, default 30) and warns if Spotlight still finds a new file there.
 - `status` counts distinct denied sessions, shows `last_run_at` and `state_path`, and reports `state_error` when the state file cannot be read (a pass then refuses to run rather than re-index into the vault twice).
 - Privacy: no tool result, hook or system text, no thinking; secrets redacted before anything is written; a message marked [private]/#private is dropped; agents reach the text only through `harness_recall kind=transcript` (role-gated, fenced as data).
 - Tested limit: redaction is pattern-based and best effort, not a guarantee; keep `transcript_roles` short.
@@ -93,7 +93,7 @@ Config (`Exchange/_harness/config.json`): `ctx_role_windows` edits the 1M list (
 - C-live: `python3 tests/c_live.py --ab <published tree>/scripts <build tree>/scripts --out <file>` before each stage ACCEPT (lint needs HARNESS_HOME set; the test suite runs with it unset).
 
 ## Confinement (0.17.0, R-053)
-- Path ceiling for config.json `workspaces`, `allowed_roots`, `project_roots`: ~/Claude/Projects, ~/.claude/crew-coordinator, ~/.claude/plugins. Anything else goes in `~/.config/crew-coordinator/operator.json` (mode 0600).
+- Path ceiling for config.json `workspaces`, `allowed_roots`, `project_roots`: <workspace>/Projects, ~/.claude/crew-coordinator, ~/.claude/plugins. Anything else goes in `~/.config/crew-coordinator/operator.json` (mode 0600).
 - `watch` and `plugin_dirs` are read from operator.json only.
 - An MCP publish override is confined to the home, workspaces and allowed roots; the CLI publish is not.
 - Warnings name the file and key (`config.json workspaces[0] ignored: outside the ceiling`), never the path.

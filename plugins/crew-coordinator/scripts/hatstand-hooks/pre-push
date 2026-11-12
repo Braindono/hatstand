@@ -1,0 +1,5 @@
+#!/bin/sh
+# Hatstand pre-push hook (crew-coordinator 0.24.0, guard spec v3): checks every pushed ref name, tag object, commit and blob
+# not yet on the remote. git passes the remote name and URL as arguments and the refs on stdin.
+here="$(cd "$(dirname "$0")" && pwd)"
+exec python3 -I -B "$here/hatstand_check.py" pre-push "$1" "$2"

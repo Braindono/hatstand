@@ -1,5 +1,5 @@
 """Test hermeticity (cc 0.15.6 review item): importing this module points HOME and the harness state at a private
-temp tree and clears every HARNESS_* variable, so no test can read or write the host's ~/.claude, ~/Claude or the
+temp tree and clears every HARNESS_* variable, so no test can read or write the host's ~/.claude, the <workspace> folder or the
 live Exchange. Each test file imports it first. A test that needs its own variable sets it after the import."""
 import atexit, os, shutil, tempfile
 
@@ -12,6 +12,7 @@ if not os.environ.get("CC_TEST_ISOLATED"):
     os.environ["HARNESS_STATE_DIR"] = os.path.join(_root, "state")
     os.environ["CC_TEST_ISOLATED"] = _root
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    os.environ["GIT_CONFIG_NOSYSTEM"] = "1"       # 0.24.0 item 17: no test reads the machine's system git config
     # 0.16.1 item 8: the release-scope gate is on in production; the existing publish tests run with it switched off in the
     # private operator.json of the test HOME. tests/test_cc161_scope_gate.py switches it on for its own cases.
     _cfg = os.path.join(_root, ".config", "crew-coordinator")
@@ -33,6 +34,28 @@ def guard_home(home):
     if not os.path.exists(t):
         with open(t, "w") as f:
             f.write("# synthetic, for tests\nzzz-synthetic-private-term\n")
+    ident = os.path.join(d, "hatstand-private-identity.txt")       # 0.24.0 item 17: the identity list, synthetic values
+    if not os.path.exists(ident):
+        with open(ident, "w") as f:
+            f.write("# synthetic, for tests\nuser zzsynthuser\nhost zzsynthhost\nemail zz@identity.example.invalid\n")
     ev = os.path.join(home, "_harness", "events.jsonl")
     if not os.path.exists(ev):
         open(ev, "a").close()
+
+
+HATSTAND_INCLUDE_PATTERNS = ("**/[Hh]atstand", "**/[Hh]atstand.git", "**/[Hh]atstand.git/", "**/[Hh]atstand/")
+
+
+def hatstand_hooks(tmp, home, gitconfig):
+    """0.24.0 item 17: install the Hatstand hooks into <tmp>/hooks-hatstand for this home and switch them on in the scratch
+    global git config (GIT_CONFIG_GLOBAL) with the four includeIf lines, as the operator does once per machine. -> the folder."""
+    import subprocess, sys
+    scripts = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+    dest = os.path.join(tmp, "hooks-hatstand")
+    guard_home(home)
+    subprocess.run([sys.executable, "-I", "-B", os.path.join(scripts, "hatstand_check.py"), "install", dest, "--home", home],
+                   check=True, capture_output=True)
+    with open(gitconfig, "a") as f:
+        for p in HATSTAND_INCLUDE_PATTERNS:
+            f.write('[includeIf "hasconfig:remote.*.url:%s"]\n\tpath = %s\n' % (p, os.path.join(dest, "gitconfig")))
+    return dest

@@ -122,7 +122,7 @@ class Untrusted(Base):
         p = os.path.join(self.home, "claude", "secretary-standing-rules.md")
         for url, ok in (("https://claude.ai/artifact/x", True), ("http://claude.ai/x", False),
                         ("https://evil.example/x", False), ("https://claude.ai.evil.example/x", False),
-                        ("https://u:p@claude.ai/x", False)):
+                        ("https://u:p@example.invalid/x", False)):
             open(p, "w").write(f"week_brief_url: {url}\n")
             r = H.secretary_do_line(self.home, "secretary")
             if ok:
@@ -369,11 +369,11 @@ class PerUserState(Base):
 
     def test_insight_share_intake_confined_and_no_symlink(self):
         p = I.intake_path(self.home, {"intake_queue": "/etc/passwd"})
-        self.assertEqual(p, os.path.join(self.home, "btf_skills_repository", "INTAKE.md"))
+        self.assertEqual(p, os.path.join(self.home, "skills_repository", "INTAKE.md"))
         self.assertEqual(I.intake_path(self.home, {"intake_queue": "sub/q.md"}), os.path.join(self.home, "sub", "q.md"))
         victim = os.path.join(self.tmp, "v3")
         open(victim, "w").write("x")
-        d = os.path.join(self.home, "btf_skills_repository")
+        d = os.path.join(self.home, "skills_repository")
         os.makedirs(d)
         os.symlink(victim, os.path.join(d, "INTAKE.md"))
         r = I.intake_append(self.home, "me", "a note")

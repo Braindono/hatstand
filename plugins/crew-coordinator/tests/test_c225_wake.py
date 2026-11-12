@@ -30,7 +30,7 @@ class W(C.Base):
         return a
 
     def pin(self, **ents):
-        self.h.wake_pin_apply("operator", ents)
+        C.legacy_pin(self.h, ents)
 
     def do(self, role="secretary", sender=None, kind="task"):
         r = self.send(sender or self.plain, "role:" + role, kind=kind)
@@ -71,8 +71,7 @@ class W(C.Base):
         for p in bad:
             with self.assertRaises(H.HarnessError, msg=p):
                 self.pin(secretary=entry("secretary", prompt=p))
-            with self.assertRaises(H.HarnessError, msg=p):                # and at request time, before the operator is asked
-                self.h.request_approval(self.plain, "wake_pin", {"entries": {"secretary": entry("secretary", prompt=p)}})
+            # 0.24.0 (item 13): the request path is removed (test_c240_item13 C6); the 0.23.0 template check above still holds
         self.assertIsNone(self.h.state().wake_pin)
 
     # T3
@@ -96,12 +95,6 @@ class W(C.Base):
         self.pin(secretary=entry("secretary", holder=a))
         with self.assertRaises(H.HarnessError):
             self.pin(secretary=entry("secretary", holder="deadbeef" * 8))
-
-    def test_wake_pin_card_shows_prompt_trigger_and_the_check_line(self):
-        self.holder()
-        r = self.h.request_approval(self.plain, "wake_pin", {"entries": {"secretary": entry("secretary", link="https://claude.ai/code/x/abc")}})
-        for part in (D.wake_prompt("secretary"), TRIG, "https://claude.ai/code/x/abc", "check this text in the cloud UI before approving", "self-reported"):
-            self.assertIn(part, r["note"])
 
     # T1
     def test_t1_holder_swap_makes_the_pin_stale_and_the_line_leaves_it_out(self):
@@ -143,6 +136,7 @@ class W(C.Base):
         self.assertIn("is spent", self.sync_text(self.holder_of("secretary")))
         # a recurring pin with the same reported fire stays
         self.pin(secretary=entry("secretary", kind="recurring"))
+        self.call("harness_inbox", agent=self.holder_of("secretary"))       # 0.24.0 (item 5): read, so R2 and nb 6 do not hold the next send
         with mock.patch.object(D.time, "time", return_value=time.time() + D.TRIG_WAKE_MIN * 60 + 5):
             r2 = self.send(self.plain, "role:secretary")
         D.record_result(self.h, relay, r2["nudge"]["msg_id"], "woke", "HTTP 200 " + RUN)
@@ -165,14 +159,6 @@ class W(C.Base):
         r = self.send(self.plain, "role:secretary", kind="notice")
         self.assertNotIn("RemoteTrigger", str(r.get("nudge") or ""))
         self.assertNotIn("ListAgents", self.do())
-
-    def test_legacy_string_pin_is_refused_at_request_and_at_apply(self):     # 0.23.0 (A-08480 item 3 gap 6): was "still works"
-        self.holder()
-        with self.assertRaisesRegex(H.HarnessError, "plain trig_ string is no longer accepted"):
-            self.h.request_approval(self.plain, "wake_pin", {"entries": {"secretary": TRIG}})
-        with self.assertRaisesRegex(H.HarnessError, "plain trig_ string is no longer accepted"):
-            self.pin(secretary=TRIG)
-        self.assertNotIn(TRIG, self.do())
 
     # T6
     def test_t6_a_fire_never_changes_role_assigned(self):
@@ -310,7 +296,7 @@ class W(C.Base):
         self.holder()
         self.pin(secretary=entry("secretary", kind="run_once"))
         mid = self.send(self.plain, "role:secretary")["nudge"]["msg_id"]
-        D.record_result(self.h, self.reg(host="local_relay") if relay else self.plain, mid, "woke", reason)
+        C.record_v023(self.h, self.reg(host="local_relay") if relay else self.plain, mid, "woke", reason)   # 0.24.0 item 3: replayed as a 0.23.0 event
         return D.wake_pin_state(self.h.state(), "secretary", self.h)[1]
 
     def test_b1_a_sender_reported_woke_without_a_status_spends_a_run_once_pin(self):
@@ -350,7 +336,7 @@ class W(C.Base):
         self.setUp()
         self.holder()
         self.pin(secretary=entry("secretary", kind="recurring"))
-        self.assertIn('Put "HTTP <status>" of the run in the reason.', self.do())
+        self.assertIn('Start the reason with "HTTP <status>" of the run (its final status).', self.do())   # 0.24.0 (A-b2950 item 3.5)
 
     def test_b2_running_wake_py_in_place_never_moves_the_code_sha(self):
         import hashlib

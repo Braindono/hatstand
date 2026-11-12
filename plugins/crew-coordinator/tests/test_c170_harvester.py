@@ -116,14 +116,14 @@ class Precision(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         root = os.path.join(tmp, "Transcripts.noindex")
         os.makedirs(root)
-        approve = "! python3 /Users/btf/Claude/Projects/Exchange/_harness/bin/harness.py approve A-0f819"
+        approve = "! python3 /Users/x/Claude/Projects/Exchange/_harness/bin/harness.py approve A-0f819"
         turns = [
-            ("operator", "! sh /Users/btf/Claude/Code/harness-ops/scripts/retag-cleanup.sh --dry-run"),
-            ("operator", "! sh /Users/btf/Claude/Code/harness-ops/scripts/retag-cleanup.sh --dry-run"),
+            ("operator", "! sh /Users/x/Claude/Code/harness-ops/scripts/retag-cleanup.sh --dry-run"),
+            ("operator", "! sh /Users/x/Claude/Code/harness-ops/scripts/retag-cleanup.sh --dry-run"),
             ("operator", approve), ("operator", approve),
-            ("operator", "! python3 /Users/btf/Claude/Projects/Exchange/_harness/bin/harness.py deny A-0f819"),
-            ("operator", "python3 /Users/btf/Claude/Projects/Exchange/_harness/bin/harness.py role-define --role x"),
-            ("operator", "python3 /Users/btf/Claude/Projects/Exchange/_harness/bin/harness.py role-define --role x"),
+            ("operator", "! python3 /Users/x/Claude/Projects/Exchange/_harness/bin/harness.py deny A-0f819"),
+            ("operator", "python3 /Users/x/Claude/Projects/Exchange/_harness/bin/harness.py role-define --role x"),
+            ("operator", "python3 /Users/x/Claude/Projects/Exchange/_harness/bin/harness.py role-define --role x"),
             ("operator", "/plan the stage two vault writer and the gate"),
             ("operator", "/plan the stage two vault writer and the gate"),
             ("operator", "Yes, add R-086 and R-087 to the 0.17.0 scope"),

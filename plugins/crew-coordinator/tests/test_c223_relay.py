@@ -9,7 +9,7 @@ from unittest import mock
 import test_c220_nudge as C
 from test_c220_nudge import D, H, TRIG, WP
 
-EV = "delivery: delivered; message_id: 1ff5b7b3-1c2a-4318-9641-07d75f23529e"
+EV = "delivery: delivered; message_id: a1b2c3d4-0000-4000-8000-0000000000e1"
 FAKE_EV = "delivery: delivered; message_id: 00000000-0000-4000-8000-000000000000"
 RUN = "cse_01Ft3xMWC2ETC3SihY2sLPDU"
 
@@ -17,6 +17,11 @@ RUN = "cse_01Ft3xMWC2ETC3SihY2sLPDU"
 class R(C.Base):
     def setUp(self):
         super().setUp()
+        # 0.24.0 (item 5): these 0.22.3 tests send tasks to one recipient back to back as setup. nb 6 (one ring per 60 s) would hold the
+        # later ones, so only that window is off here (SAME_SESSION_S = 0); R1, R1b, R1c, R2 and the scan stay on.
+        nb6 = mock.patch.object(D, "SAME_SESSION_S", 0)
+        nb6.start()
+        self.addCleanup(nb6.stop)
         self.op["doorbell"] = {"nudge_per_agent_hour": 60, "nudge_per_pair_hour": 30}
         for r in ("harness-critic", "ops-coder", "steward"):
             self.h.role_define("operator", r, "harness-ops", carry="none")
@@ -67,7 +72,7 @@ class R(C.Base):
         self.assertTrue(D.record_result(self.h, a, mid, "delivered", EV).get("reported"))
         res = self.ev("nudge.result")[-1]
         self.assertEqual((res["by"], res["for"], res["outcome"]), (a, self.cloud, "delivered"))
-        self.assertEqual(res["evidence"], {"delivery": "delivered", "message_id": "1ff5b7b3-1c2a-4318-9641-07d75f23529e",
+        self.assertEqual(res["evidence"], {"delivery": "delivered", "message_id": "a1b2c3d4-0000-4000-8000-0000000000e1",
                                            "self_reported": True})
 
     # T2
@@ -81,7 +86,10 @@ class R(C.Base):
         self.assertEqual(self.ev("nudge.relay_offer")[0]["to_session"], "local_cur")
         self.assertEqual(self.ev("nudge.result"), [])               # relay_requested does not fill the slot
         got = [x for x in (self.poll(a), self.poll(b), self.poll(a)) if x]
-        self.assertEqual(len(got), 1)
+        # 0.24.0 (item 18 point 1): a's live claim repeats on its next result (the same claim); b gets nothing; still one claim
+        self.assertEqual(got[0], got[-1])
+        self.assertEqual(len(got), 2)
+        self.assertEqual(len(self.ev("nudge.relay_claim")), 1)
         # a notice offers no nudge at all, so there is nothing to relay
         self.assertIsNone(self.nudge(kind="notice"))
         self.assertEqual(len(self.ev("nudge.relay_offer")), 1)
@@ -133,7 +141,7 @@ class R(C.Base):
         self.assertIsNone(self.poll(self.cur))                        # the recipient never relays to itself
         first = self.poll(a)
         self.assertTrue(first)
-        self.assertIsNone(self.poll(a))                               # b and c have not had a turn yet
+        self.assertEqual(self.poll(a), first)                          # b and c have not had a turn yet; item 18: a sees its own claim again
         second, third = self.poll(b), self.poll(c)
         self.assertTrue(second and third)
         claimers = [d["by"] for d in self.ev("nudge.relay_claim")]
@@ -182,14 +190,14 @@ class R(C.Base):
         with self.assertRaises(H.HarnessError):
             D.record_result(self.h, claimer, mid2, "delivered", "rang it")
         with self.assertRaises(H.HarnessError):
-            D.record_result(self.h, claimer, mid2, "delivered", "delivery: held; message_id: 1ff5b7b3-1c2a-4318-9641-07d75f23529e")
+            D.record_result(self.h, claimer, mid2, "delivered", "delivery: held; message_id: a1b2c3d4-0000-4000-8000-0000000000e1")
 
     def test_t5_http_form_on_a_message_with_no_trigger_offer_is_refused(self):
         x, = self.holders("envoy")
         mid = self.nudge()                                            # no pinned trigger, no relay asked
         with self.assertRaises(H.HarnessError):
             D.record_result(self.h, x, mid, "woke", "HTTP 200 " + RUN)
-        self.h.wake_pin_apply("operator", {"curator": WP("curator")})      # 0.23.0 (gap 6): dict form
+        C.legacy_pin(self.h, {"curator": WP("curator")})      # 0.23.0 (gap 6): dict form
         mid2 = self.nudge()
         self.assertTrue(D.record_result(self.h, x, mid2, "woke", "HTTP 200 " + RUN).get("reported"))
 
@@ -280,9 +288,9 @@ class R(C.Base):
         self.assertIn(mid, line)
         rel = self.ev("nudge.relay_released")
         self.assertEqual([(r["reason"], r["claimer"]) for r in rel], [("claim_timeout", a)])
-        with self.assertRaises(H.HarnessError):
-            D.record_result(self.h, a, mid, "delivered", EV)         # the silent claimer's late report: refused
-        self.assertTrue(D.record_result(self.h, b, mid, "delivered", EV).get("reported"))
+        # 0.24.0 (item 18 point 4, RL3): an agent that held a claim on this message may report late; once per message
+        self.assertTrue(D.record_result(self.h, a, mid, "delivered", EV).get("reported"))
+        self.assertTrue(D.record_result(self.h, b, mid, "delivered", EV).get("already_reported"))
 
     def test_t9_the_timed_out_claimer_does_not_get_the_same_message_back(self):
         a, = self.holders("envoy")

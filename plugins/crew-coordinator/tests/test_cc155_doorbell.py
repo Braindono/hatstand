@@ -22,6 +22,10 @@ class DB(Base):
         self._p = mock.patch.object(H, "_operator_file", lambda: (self.op, []))
         self._p.start()
         self.addCleanup(self._p.stop)
+        # 0.24.0 (item 5): the cap tests send back to back to one recipient as setup; nb 6 (one ring per 60 s) is off here only
+        nb6 = mock.patch.object(D, "SAME_SESSION_S", 0)
+        nb6.start()
+        self.addCleanup(nb6.stop)
         for r in ("alpha", "beta", "gamma"):
             self.h.role_define("operator", r, "proj")
         ids = []
@@ -70,7 +74,7 @@ class Nudge(DB):
         n = 0
         for i in range(12):
             r = self.send(self.a, [self.b, self.c][i % 2], body=f"x{i}")
-            n += "nudge" in r
+            n += isinstance(r.get("nudge"), dict)     # 0.24.0 (item 5, R1c): a capped task carries a relay text, not a ring
         self.assertEqual(n, 10)        # 0.17.0 (R-055): default sender cap 10/h (was 6)
         self.assertTrue(any("sender cap" in e["data"]["reason"] for e in self.ev("nudge.skipped")))
 
@@ -78,13 +82,13 @@ class Nudge(DB):
         sent = 0
         for i in range(10):
             frm, to = (self.a, self.b) if i % 2 == 0 else (self.b, self.a)
-            sent += "nudge" in self.send(frm, to, kind="question", body=f"ack {i}")
+            sent += isinstance(self.send(frm, to, kind="question", body=f"ack {i}").get("nudge"), dict)   # 0.24.0 item 5 R1c
         self.assertEqual(sent, 6)     # default pair cap (0.17.0: 6, was 3), counted both directions
         self.assertTrue(any("pair cap" in e["data"]["reason"] for e in self.ev("nudge.skipped")))
 
     def test_global_cap(self):
         self.op["doorbell"] = {"global_per_hour": 2, "nudge_per_pair_hour": 30}
-        flags = ["nudge" in self.send(self.a, self.b, body=f"m{i}") for i in range(4)]
+        flags = [isinstance(self.send(self.a, self.b, body=f"m{i}").get("nudge"), dict) for i in range(4)]   # 0.24.0 item 5 R1c
         self.assertEqual(flags, [True, True, False, False])
 
     def test_once_per_message_id(self):

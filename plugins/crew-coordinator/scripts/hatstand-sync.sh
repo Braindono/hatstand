@@ -1,5 +1,5 @@
 #!/bin/sh
-# Sync the published harness build to the private repo github.com/Braindono/hatstand.
+# Sync the published harness build to the public mirror github.com/Braindono/hatstand (hatstand-private is the private repo).
 # 0.17.0 (R-048): shipped in crew-coordinator and run by `harness_admin op=hatstand_sync` (dry run; push after a clean
 # dry run of the same marketplace). HATSTAND_REPO overrides the remote (tests use a local bare repo). The temp clone is
 # removed on exit (our own temp folder).
@@ -10,23 +10,29 @@
 # registry or config. Needs the gh login (gh auth status). Safe to re-run; no changes means no commit.
 # STANDING RULE (operator 2026-10-26, D-c92cb): the corpus and the ledger are NEVER published to Hatstand. No corpus
 # entry, ledger event, vault file, handoff, digest or archive may reach this repo. 0.18.0 (R-097) enforces it before
-# every push: the secret scan below, then hatstand_guard.py (path denylist, ledger-shape lines, live corpus titles).
-# Any hit stops the sync and nothing is pushed. Do not weaken or bypass these checks; the one exemption (the synthetic
-# steward-r045 fixture, manifest-hashed) is listed in the CHANGELOG.
+# every push: hatstand_check.py (0.24.0 item 17) checks the staged blobs with hatstand_guard.py's rules (path denylist,
+# ledger-shape lines, live corpus titles, private terms, identity, email, credentials, workspace paths). Any hit stops the
+# sync and nothing is pushed. Do not weaken or bypass these checks; the one exemption (the synthetic steward-r045 fixture,
+# manifest-hashed) is listed in the CHANGELOG.
+# 0.24.0 item 17 (guard spec v3): the installed pre-commit and pre-push hooks run on the commit and on every push, and this
+# script refuses to push unless they will run (self-check of the clone's core.hooksPath). It never passes --no-verify.
 set -eu
 # a failing command inside a pipe must stop the sync (envoy m-5af8e7c4a480); pipefail where the shell has it, and the
 # two git calls that feed the checks below are captured to files and checked on their own, which works in any sh
 (set -o pipefail) 2>/dev/null && set -o pipefail
 PUSH=0; [ "${1:-}" = "--push" ] && PUSH=1
-# 0.18.0 (R-082): without HARNESS_HOME, the new home ~/Claude/Exchange first, then the old path (one release)
-if [ -n "${HARNESS_HOME:-}" ]; then XH="$HARNESS_HOME"
-elif [ -d "$HOME/Claude/Exchange" ]; then XH="$HOME/Claude/Exchange"
-else XH="$HOME/Claude/Projects/Exchange"; fi
+# 0.24.0 item 17: the harness home comes from HARNESS_HOME only (harness_admin op=hatstand_sync sets it); no built-in path
+[ -n "${HARNESS_HOME:-}" ] || { echo "hatstand: STOP, HARNESS_HOME is not set; nothing pushed" >&2; exit 1; }
+XH="$HARNESS_HOME"
 M="$XH/_harness"
 REPO_URL="${HATSTAND_REPO:-https://github.com/Braindono/hatstand.git}"
-GUARD="$(cd "$(dirname "$0")" && pwd)/hatstand_guard.py"
-[ -f "$GUARD" ] || { echo "hatstand: STOP, hatstand_guard.py missing next to this script; nothing pushed" >&2; exit 1; }
-T="$(mktemp -d)"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CHECK="$HERE/hatstand_check.py"
+for f in hatstand_check.py hatstand_guard.py; do
+  [ -f "$HERE/$f" ] || { echo "hatstand: STOP, $f missing next to this script; nothing pushed" >&2; exit 1; }
+done
+PY="${PYTHON:-python3}"
+T="$(mktemp -d "${TMPDIR:-/tmp}/hatstand.XXXXXX")"   # 0.24.0 (D-2ca6d): macOS mktemp -d ignores TMPDIR without a template
 trap 'rm -rf "$T"' EXIT
 W="$T/hatstand"
 GH='!gh auth git-credential'
@@ -45,44 +51,53 @@ tag_new() {
     if git -c user.name=Braindono -c user.email=Braindono@users.noreply.github.com tag -a "$tag" -m "$pl $v" \
        && git -c credential.helper= -c credential.helper="$GH" push -q origin "refs/tags/$tag:refs/tags/$tag"; then
       echo "hatstand: tagged $tag"
+      echo "hatstand: pushed_ref refs/tags/$tag $(git rev-parse "refs/tags/$tag")"
     else
       echo "hatstand: tag $tag failed (the files are already pushed)" >&2
     fi
   done
 }
 
+# 0.24.0 (A-b2950 item 14): after a push, fetch origin main and compare trees; any difference, or a failed fetch, is a STOP and
+# no tag is pushed. FETCH_HEAD is removed first, so an old one can never pass for a fresh fetch.
+verify_remote() {
+  rm -f .git/FETCH_HEAD
+  if ! git -c credential.helper= -c credential.helper="$GH" fetch -q origin main; then
+    echo "hatstand: STOP, remote main differs from the pushed tree ($(git rev-parse --short HEAD) vs fetch failed)" >&2; exit 1
+  fi
+  lt="$(git rev-parse "HEAD^{tree}")"
+  rt="$(git rev-parse -q --verify "FETCH_HEAD^{tree}" 2>/dev/null || echo none)"
+  if [ "$lt" != "$rt" ]; then
+    echo "hatstand: STOP, remote main differs from the pushed tree ($(git rev-parse --short HEAD) vs $(git rev-parse -q --short --verify FETCH_HEAD 2>/dev/null || echo none))" >&2
+    exit 1
+  fi
+  echo "hatstand: verified $(git rev-parse --short HEAD) = release tree$1"
+}
+
 git -c credential.helper= -c credential.helper="$GH" clone -q "$REPO_URL" "$W"
 cd "$W"
+# 0.24.0 item 17 (spec section 7, G12): the hooks must run for this clone, or nothing is committed or pushed
+if ! "$PY" -I -B "$CHECK" self-check "$W" --home "$XH"; then
+  echo "hatstand: STOP, the Hatstand hooks are not on for this clone (install them and the global includeIf); nothing pushed" >&2
+  exit 1
+fi
 rsync -rc --delete --exclude .DS_Store --exclude __pycache__ "$M/marketplace/plugins/" plugins/
 cp "$M/wake.py" bin/wake.py && chmod +x bin/wake.py
 cp "$M/marketplace/.claude-plugin/marketplace.json" .claude-plugin/marketplace.json
 git add -A
 if git diff --cached --quiet; then
   echo "hatstand: no changes, nothing to push"
-  [ "$PUSH" = 1 ] && tag_new
+  if [ "$PUSH" = 1 ]; then
+    verify_remote " (no changes)"
+    tag_new
+  fi
   exit 0
 fi
 
-# fail closed: refuse to push anything that looks like a secret or personal address.
-# Known detector code and synthetic test fixtures are exempt BY FILE (they define the secret patterns and use fake
-# values such as AKIAIOSFODNN7EXAMPLE); a match anywhere else, including any other test file, stops the push.
-EXEMPT='plugins/crew-coordinator/scripts/(transcript_indexer|insight_share)\.py|plugins/crew-coordinator/scripts/hatstand-sync\.sh|plugins/crew-coordinator/tests/(test_cc162_indexer|test_e4_c3)\.py'
-git diff --cached -U0 > "$T/staged.diff" || { echo "hatstand: STOP, git diff failed; nothing pushed" >&2; exit 1; }
-HITS="$(awk '/^\+\+\+ /{f=substr($2,3)} /^\+[^+]/{print f"\t"$0}' "$T/staged.diff" | grep -E "gh[pousr]_[A-Za-z0-9]{16,}|github_pat_|(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{20,}|BEGIN [A-Z ]*PRIVATE KEY|(AKIA|ASIA)[0-9A-Z]{12,}|AIza[0-9A-Za-z_-]{20,}|privaterelay" | grep -vE "^($EXEMPT)	" || true)"
-if [ -n "$HITS" ]; then
-  echo "hatstand: STOP, the staged diff matches a secret pattern outside the exempt files; nothing pushed:" >&2
-  echo "$HITS" | cut -c1-160 >&2; exit 1
-fi
-# corpus/ledger guard (R-097, D-c92cb): path denylist, ledger-shape lines and live corpus titles. The R-045 steward
-# fixture is a synthetic, frozen corpus; only its files whose sha matches its manifest are exempt, and the secret scan
-# above still reads them.
-# Names are NUL-separated and unquoted (core.quotepath=false, -z): a quoted non-ASCII name would not open and must
-# never be skipped (critic B1). HARNESS_HOME goes to the guard so the live-title check also runs when this script is
-# run directly (critic N2).
-git -c core.quotepath=false diff --cached --name-only -z --diff-filter=ACMR > "$T/staged.names" \
-  || { echo "hatstand: STOP, git could not list the staged files; nothing pushed" >&2; exit 1; }
-if ! HARNESS_HOME="${M%/_harness}" "${PYTHON:-python3}" -B "$GUARD" "$W" < "$T/staged.names"; then
-  echo "hatstand: STOP, corpus/ledger guard hit (standing rule D-c92cb); nothing pushed" >&2; exit 1
+# fail closed (R-097, D-c92cb; 0.24.0 item 17): every staged blob, as staged, through all of the guard's rules. The secret
+# patterns now live in hatstand_guard.py (rule 5d); detector fixtures are exempt by path AND sha256 (CRED_PINNED).
+if ! "$PY" -I -B "$CHECK" staged "$W" --home "$XH"; then
+  echo "hatstand: STOP, guard hit (standing rule D-c92cb); nothing pushed" >&2; exit 1
 fi
 
 CHANGED="$(git diff --cached --name-only | sed -n 's#^plugins/\([^/]*\)/.*#\1#p' | sort -u)"
@@ -100,6 +115,8 @@ if [ "$PUSH" = 1 ]; then
 Published build(s) mirrored from the harness marketplace."
   git -c credential.helper= -c credential.helper="$GH" push -q origin main
   echo "hatstand: pushed $(git rev-parse --short HEAD)"
+  echo "hatstand: pushed_ref refs/heads/main $(git rev-parse HEAD)"
+  verify_remote ""
   tag_new
 else
   echo "hatstand: dry run, nothing pushed (use --push)"

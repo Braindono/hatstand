@@ -81,7 +81,7 @@ class Redact(unittest.TestCase):
         self.assertIn("ssn", self.kinds("ssn 123-45-6789"))
 
     def test_ordinary_text_and_ids_survive(self):
-        s = "commit 8c44ef863d4e fixed m-49602ba35cb0 and D-85cbc in /Users/btf/Claude/x.md, token budget is 2k, no password here"
+        s = "commit 8c44ef863d4e fixed m-49602ba35cb0 and D-85cbc in /Users/x/Claude/x.md, token budget is 2k, no password here"
         self.assertEqual(T.redact(s), (s, []))
 
     def test_private_marker_drops_whole_message(self):

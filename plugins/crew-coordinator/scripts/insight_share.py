@@ -81,15 +81,32 @@ def on_prompt(h, st, aid, prompt):
 
 # ---- C2: skill-repo intake. Append only; the secretary curates weekly, the harness has no curation logic. ---------
 
+INTAKE_DIR = "skills_repository"         # 0.24.0 (A-b2950 item 15, envoy m-87cdc272127b): a neutral default name
+
+
+def _intake_dir(home):
+    """The intake folder: <home>/skills_repository. An install from before 0.24 kept its queue in a folder named <name>_skills_repository;
+    while that one exists and the new one does not, it stays in use (exactly one such folder, a real directory), so nothing moves."""
+    new = os.path.join(home, INTAKE_DIR)
+    if os.path.isdir(new):
+        return new
+    try:
+        old = sorted(d for d in os.listdir(home) if d.endswith("_" + INTAKE_DIR) and not os.path.islink(os.path.join(home, d))
+                     and os.path.isdir(os.path.join(home, d)))
+    except OSError:
+        old = []
+    return os.path.join(home, old[0]) if len(old) == 1 else new
+
+
 def intake_path(home, cfg=None):
-    default = os.path.join(home, "btf_skills_repository", "INTAKE.md")
+    default = os.path.join(_intake_dir(home), "INTAKE.md")
     p = (cfg or {}).get("intake_queue")
     if not isinstance(p, str) or not p.strip():
         return default
     p = p if os.path.isabs(p) else os.path.join(home, p)
-    # 0.15.1 (P5): config.json is agent-writable; the queue must resolve under the home or ~/Claude/Projects
+    # 0.15.1 (P5): config.json is agent-writable; the queue must resolve under the home or <workspace>/Projects
     real = os.path.realpath(p)
-    for root in (home, os.path.expanduser("~/Claude/Projects")):
+    for root in (home, os.path.expanduser(os.path.join("~", "Claude", "Projects"))):
         r = os.path.realpath(root)
         if real == r or real.startswith(r.rstrip(os.sep) + os.sep):
             return p
@@ -112,6 +129,6 @@ def intake_append(home, who, text, cfg=None):
     fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as f:
         if new:
-            f.write("# btf_skills_repository intake queue\n\nAppend only. The secretary curates weekly.\n\n")
+            f.write("# skills_repository intake queue\n\nAppend only. The secretary curates weekly.\n\n")
         f.write(f"- {time.strftime('%Y-%m-%d')} {who}: {text}\n")
     return {"appended": p}

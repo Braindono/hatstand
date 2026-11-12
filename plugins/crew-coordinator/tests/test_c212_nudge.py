@@ -37,12 +37,13 @@ class Base(unittest.TestCase):
             json.dump(d, f)
 
     def wake(self, d):
-        """The operator's path: the file is the proposal, the grant pins it. -> the approval id."""
+        """0.24.0 (item 13): the operator-approved pin is gone; a legacy pin is written as the 0.23.0 grant wrote it, from the file's
+        entries that pass the 0.23.0 check (legacy pins stay readable until stale)."""
         self.wake_file(d)
-        r = self.call("harness_admin", op="wake_pin", agent=self.plain, args={})
-        rec = self.h._approval_records()[r["pending"]]
-        self.h.approve(r["pending"], code=rec["args_digest"][:4], tty=True)
-        return r
+        entries, _ = self.h.wake_entries_from_file()
+        st = self.h.state()
+        self.h.store.append("wake.pinned", "human", {"entries": {k: self.h._wake_entry_ok(k, v, st.role_holder(k)) for k, v in entries.items()}})
+        return {"entries": entries}
 
     def reg(self, role=None, host=None, **kw):
         return self.h.register(project="harness-ops", model=MODEL, task="t", role=role, host_session_id=host, **kw)["id"]
@@ -129,24 +130,7 @@ class Item1WakeTrigger(Base):
         with mock.patch.object(D.time, "time", return_value=time.time() + D.TRIG_WAKE_MIN * 60 + 5):
             self.assertIn("trig_NEWoperatorPinned1", self.nudge(self.reg(host="local_r"), "role:secretary")["do"])
 
-    def test_the_operator_sees_the_entries_and_only_the_grant_pins(self):
-        sec = self.reg("secretary")
-        self.wake_file({"secretary": E("secretary"), "ops-coder": "sendmessage:x", "curator": "trig_FAKEplainstring01"})
-        r = self.call("harness_admin", op="wake_pin", agent=self.plain, args={})
-        want = dict(E("secretary"), holder=sec)
-        self.assertEqual(r["entries"], {"secretary": want})
-        self.assertEqual(r["ignored"], ["curator", "ops-coder"])                          # 0.23.0 (gap 6): a plain trig_ string is left out
-        rec = self.h._approval_records()[r["pending"]]
-        self.assertEqual(rec["args"], {"entries": {"secretary": want}})                  # the card's args are exactly what gets pinned
-        self.assertIsNone(self.h.state().wake_pin)                                       # nothing pinned before the grant
-        self.h.approve(r["pending"], code=rec["args_digest"][:4], tty=True)
-        self.assertEqual(self.h.state().wake_pin["entries"]["secretary"]["trigger"], TRIG)
-
-    def test_only_the_operator_pins_and_only_human_events_count(self):
-        with self.assertRaises(H.HarnessError):
-            self.h.wake_pin_apply(self.plain, {"secretary": TRIG})
-        with self.assertRaises(H.HarnessError):
-            self.h.wake_pin_apply("operator", {"secretary": "trig_bad;x"})
+    def test_only_human_wake_pinned_events_count(self):     # 0.24.0 (item 13): legacy pins; the operator-only apply is removed
         self.h.store.append("wake.pinned", self.plain, {"entries": {"secretary": TRIG}})   # forged actor
         self.reg("secretary")
         self.assertIsNone(self.h.state().wake_pin)
@@ -162,20 +146,20 @@ class Item1WakeTrigger(Base):
         self.reg("secretary")
         self.reg("design-system")
         self.wake({"secretary": E("secretary"), "design-system": E("design-system")})
-        self.assertIn(TRIG, self.nudge(self.plain, "role:secretary")["do"])
-        self.assertNotIn("RemoteTrigger", self.nudge(self.reg(host="local_o"), "role:design-system")["do"])
+        self.assertIn(TRIG, self.nudge(self.plain, "role:secretary", "handoff")["do"])   # 0.24.0 (item 5): R2 replaces this slot for task/question/review; it stays for handoff
+        self.assertNotIn("RemoteTrigger", self.nudge(self.reg(host="local_o"), "role:design-system", "handoff")["do"])
         self.assertEqual(len(self.events("nudge.trigwake")), 1)
 
     def test_delivered_frees_the_slot_skipped_and_woke_do_not(self):
         self.reg("secretary")
         self.wake({"secretary": E("secretary")})
-        n = self.nudge(self.plain, "role:secretary")
+        n = self.nudge(self.plain, "role:secretary", "handoff")   # 0.24.0 (item 5): R2 replaces this slot for task/question/review; it stays for handoff
         self.call("harness_admin", op="nudge_result", agent=self.plain, args={"msg_id": n["msg_id"], "outcome": "delivered", "reason": "row"})
         b = self.reg(host="local_fb")
-        n2 = self.nudge(b, "role:secretary")
+        n2 = self.nudge(b, "role:secretary", "handoff")
         self.assertIn("RemoteTrigger", n2["do"])                                          # slot freed by the delivered report
-        self.call("harness_admin", op="nudge_result", agent=b, args={"msg_id": n2["msg_id"], "outcome": "woke", "reason": "trigger"})
-        self.assertNotIn("RemoteTrigger", self.nudge(self.reg(host="local_fc"), "role:secretary")["do"])
+        self.call("harness_admin", op="nudge_result", agent=b, args={"msg_id": n2["msg_id"], "outcome": "woke", "reason": "HTTP 200"})
+        self.assertNotIn("RemoteTrigger", self.nudge(self.reg(host="local_fc"), "role:secretary", "handoff")["do"])
         self.assertEqual(len(self.events("nudge.trigwake_released")), 1)
 
     def test_notice_kind_and_a_capped_offer_never_wake(self):
@@ -186,7 +170,9 @@ class Item1WakeTrigger(Base):
         with mock.patch.object(D, "_opcfg", return_value=dict(D._opcfg(self.h), global_per_hour=1)):
             self.h.store.append("nudge.offered", "system", {"msg": "m-x", "from": "z", "to": ["q"]})     # fills the global cap of 1
             r = self.call("harness_send", agent=self.reg(host="local_c2"), to="role:secretary", body="b2", kind="task")
-        self.assertNotIn("nudge", r)
+        # 0.24.0 (item 5 R1c + item 18 fix round 2): a capped task asks for a relay, which may target the role's ok legacy pin;
+        # the send itself still fires nothing (no trigger line, no trigwake)
+        self.assertEqual(r.get("nudge"), "relay requested (capped:global; Code to Cowork)")
         self.assertEqual(self.events("nudge.trigwake"), [])
         self.assertTrue(s)
 
@@ -208,7 +194,7 @@ class Item1WakeTrigger(Base):
         self.reg("secretary")
         self.wake({"secretary": E("secretary")})
         n = self.nudge(self.plain, "role:secretary", "task")
-        res = self.call("harness_admin", op="nudge_result", agent=self.plain, args={"msg_id": n["msg_id"], "outcome": "woke", "reason": "trigger"})
+        res = self.call("harness_admin", op="nudge_result", agent=self.plain, args={"msg_id": n["msg_id"], "outcome": "woke", "reason": "HTTP 200"})
         self.assertEqual(res["outcome"], "woke")
         self.assertEqual(D.outcomes(self.h.store.read_all())["woke"], 1)
 
@@ -358,7 +344,7 @@ class Item5CliSettle(Base):
         r = self.reg("curator", "local_warmcli")
         with mock.patch.dict(os.environ, {"HARNESS_HOME": self.home}), contextlib.redirect_stdout(io.StringIO()):
             H.main(["inbox", "--agent", r[:8], "--peek"])
-        outs = [self.nudge(self.reg(host="local_wc%d" % i), r[:8], "task")["do"] for i in range(3)]
+        outs = [self.nudge(self.reg(host="local_wc%d" % i), r[:8], "handoff")["do"] for i in range(3)]   # 0.24.0 (item 5): R2 replaces this slot for task/question/review; it stays for handoff
         self.assertTrue(all(o.startswith("Do: SendMessage to local_warmcli") for o in outs))
         self.assertEqual(self.events("nudge.idwake"), [])
 

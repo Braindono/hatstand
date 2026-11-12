@@ -249,6 +249,7 @@ class HatstandTags(unittest.TestCase):
         g("add", "-A", cwd=seed)
         g("commit", "-q", "-m", "seed", cwd=seed)
         g("push", "-q", self.bare, "main", cwd=seed)
+        _env.hatstand_hooks(self.tmp, self.home, os.path.join(self.tmp, "gitconfig"))   # 0.24.0 item 17: hooks on, as installed
         self.env = dict(os.environ, HARNESS_HOME=self.home, HATSTAND_REPO="file://" + self.bare, GIT_CONFIG_GLOBAL=os.path.join(self.tmp, "gitconfig"))
 
     def test_the_top_level_version_is_read_as_json_and_tags_are_pushed_as_full_refs(self):

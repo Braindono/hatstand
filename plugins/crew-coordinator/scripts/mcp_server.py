@@ -22,8 +22,9 @@ S, I, B, ARR = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}, {"t
 # dedicated tools and everything else goes through one `harness_admin` op tool.
 # Rules and patterns live in the protocol skill, loaded only when needed.
 ADMIN_OPS = ["whoami", "ledger", "thread", "status", "set_expertise", "task_update", "group", "retire",
-             "set_project", "roster", "role_define", "role_assign", "release_scope", "wake_pin", "registry", "verify", "export", "reload", "health", "archive", "unarchive", "pin",
-             "approvals", "flag_release", "publish_release", "pin_corpus_index", "retag", "listen", "vault_write", "operator_script", "hatstand_sync", "lesson_curate", "concept_link", "concept_unlink", "recall_report", "notify_sent", "approvals_pending", "session_titled", "notify_undelivered", "nudge_result", "drift_explain", "case", "proctor_shadow"]
+             "set_project", "roster", "role_define", "role_assign", "release_scope", "wake_register", "wake_verify", "wake_disabled", "registry", "verify", "export", "reload", "health", "archive", "unarchive", "pin",
+             "approvals", "flag_release", "publish_release", "pin_corpus_index", "retag", "listen", "vault_write", "operator_script", "hatstand_sync", "lesson_curate", "concept_link", "concept_unlink", "recall_report", "notify_sent", "approvals_pending", "session_titled", "notify_undelivered", "nudge_result", "drift_explain", "case", "proctor_shadow",
+             "notify_listed", "release_defect"]   # 0.24.0 (A-b2950 items 8, 9)
 # 0.12.1 (C-01dcf): allowed args per admin op; unknown keys are an error, never silently ignored.
 ADMIN_ARGS = {
     "whoami": set(), "ledger": {"active_only"}, "thread": {"thread"}, "status": {"path"},
@@ -40,8 +41,10 @@ ADMIN_ARGS = {
     "pin": {"ids", "off", "reason", "drafter_model", "lead_model"},
     "idle_wake": {"project", "on"},
     "pin_corpus_index": {"sha", "rules", "ref"},
-    "release_scope": {"plugin", "version", "items", "rationale", "approval_ref"},
-    "wake_pin": set(),
+    "release_scope": {"plugin", "version", "items", "rationale", "approval_ref", "candidate_tree"},   # 0.24.0 item 7: candidate_tree
+    "wake_register": {"trigger", "session"},           # 0.24.0 (A-b2950 item 13): wake_pin removed (D-8ef51)
+    "wake_verify": {"trigger", "prompt", "enabled", "session", "kind", "run_at"},
+    "wake_disabled": {"trigger"},
     "drift_explain": {"code_sha", "reason"},
     # 0.23.0 (A-08480 item 2): proctor case events; each action also rejects the keys it does not use (H.Harness.CASE_ARGS)
     "case": {"action", "case", "source", "severity", "magnitude", "family", "summary", "subject", "rule_ids", "rationale", "diff", "cause",
@@ -56,7 +59,9 @@ ADMIN_ARGS = {
     "approvals": {"all"}, "lesson_curate": {"ids", "keys"},
     "concept_link": {"entry", "concept", "role"}, "concept_unlink": {"entry", "concept"},
     "recall_report": {"weeks"},
-    "notify_sent": {"id"}, "approvals_pending": set(), "session_titled": {"title", "status"}, "notify_undelivered": set(), "nudge_result": {"msg_id", "outcome", "reason"},
+    "notify_sent": {"id"}, "approvals_pending": set(), "session_titled": {"title", "status"}, "notify_undelivered": set(), "nudge_result": {"msg_id", "outcome", "reason", "prompt", "enabled", "session"},   # 0.24.0 item 13: fire fields
+    "notify_listed": {"ids"},
+    "release_defect": {"plugin", "version", "found_in", "severity", "summary", "refs", "supersedes"},   # 0.24.0 item 9
     "flag_release": {"name", "retired", "replaced_by", "external"},
     "publish_release": {"path", "notes", "required", "renamed_from", "pkg", "accept", "override", "build", "dry_run"},
 }
@@ -257,7 +262,7 @@ def with_note(h, a, r):
     if not n or not str(n).strip():
         return r
     try:
-        msg = h.state_note(a["agent"], str(n), a.get("topic"))
+        msg = h.state_note(a["agent"], str(n), a.get("topic"), ids_check=True)   # 0.24.0 item 1: riding note, write and flag
     except H.HarnessError as e:
         msg = f"state_note rejected: {e}"
     except Exception as e:
@@ -357,14 +362,24 @@ def admin(h, a):
         return h.approvals_pending()
     if op == "nudge_result":   # 0.21.1 (A-58ff8 item 4): the sender reports whether the nudge rang
         import doorbell
-        res = doorbell.record_result(h, caller_id(h, ag), x.get("msg_id"), x.get("outcome"), x.get("reason"))
+        res = doorbell.record_result(h, caller_id(h, ag), x.get("msg_id"), x.get("outcome"), x.get("reason"),
+                                     fire={k: x[k] for k in ("prompt", "enabled", "session") if k in x})
         doorbell.settle(h, caller_id(h, ag))
         return res
     if op == "notify_undelivered":   # 0.21.0 (critic D2): the cloud fallback's reader for the secretary digest; read-only, each notify id once
         import notify
         rows = notify.undelivered(h)
-        return {"count": len(rows), "undelivered": rows,
-                "text": "\n".join("%s %s %s %d min" % (r["id"], r["kind"], r["role"], r["age_minutes"]) for r in rows) or "no undelivered pushes"}
+        line, drop = notify.dropped(h)      # 0.24.0 (A-b2950 item 8.3): expired rows, until the secretary's notify_listed records them
+        text = "\n".join("%s %s %s %d min" % (r["id"], r["kind"], r["role"], r["age_minutes"]) for r in rows) or "no undelivered pushes"
+        out = {"count": len(rows), "undelivered": rows, "text": text + ("\n" + line if line else "")}
+        if line:
+            out["dropped"] = drop
+        return out
+    if op == "release_defect":   # 0.24.0 (A-b2950 item 9): the critic or envoy records a defect found in a release; events only
+        return h.release_defect(ag, x)
+    if op == "notify_listed":   # 0.24.0 (A-b2950 item 8.2): the secretary records the rows its digest carried; secretary only
+        import notify
+        return notify.mark_listed(h, caller_id(h, ag), x.get("ids"))
     if op == "notify_sent":   # 0.21.0: the agent reports it called PushNotification for this notify id
         import notify
         return notify.mark_sent(h, caller_id(h, ag), x.get("id"))
@@ -417,8 +432,13 @@ def admin(h, a):
         for k in ("plugin", "version", "items", "rationale"):
             if not x.get(k):
                 raise H.HarnessError(f"release_scope: {k} required")
-        return pend(h, h.resolve(h.state(), ag, follow=False), "release_scope",
-                    {k: x.get(k) for k in ("plugin", "version", "items", "rationale", "approval_ref") if x.get(k) is not None})
+        sa = {k: x.get(k) for k in ("plugin", "version", "items", "rationale", "approval_ref") if x.get(k) is not None}
+        r = pend(h, h.resolve(h.state(), ag, follow=False), "release_scope", sa)
+        if x.get("candidate_tree"):   # 0.24.0 (A-b2950 item 7): not part of the approval args; the warning only (never a refusal)
+            w = h.scope_warnings(sa, candidate_tree=str(x["candidate_tree"]), previous_tree=h.published_tree(sa.get("plugin")))   # fix round 1: last published tree
+            if isinstance(r, dict) and w:
+                r["warnings"] = list(dict.fromkeys((r.get("warnings") or []) + w))
+        return r
     if op == "case":   # 0.23.0 (A-08480 item 2): proctor case events, MCP only (no CLI write path)
         return h.case_op(ag, x)
     if op == "proctor_shadow":   # 0.23.0 (item 2): ending or restarting the proctor's shadow period is the operator's grant
@@ -428,10 +448,15 @@ def admin(h, a):
         return pend(h, caller_id(h, ag), "proctor_shadow", pa)
     if op == "drift_explain":   # 0.22.0 (gate spec D): the curator or envoy explains an unknown installed code sha
         return h.drift_explain(caller_id(h, ag), x.get("code_sha"), x.get("reason"))
-    if op == "wake_pin":   # 0.21.2 (item 1, critic B1): snapshot wake.json into an approval; only the operator's grant writes wake.pinned
-        entries, ignored = h.wake_entries_from_file()
-        r = pend(h, h.resolve(h.state(), ag, follow=False), "wake_pin", {"entries": entries})
-        return dict(r, entries=entries, ignored=ignored) if isinstance(r, dict) else r
+    if op == "wake_pin":   # 0.24.0 (A-b2950 item 13): the operator-approved pin is gone
+        raise H.HarnessError("wake_pin: removed in 0.24 (D-8ef51): use wake_register")
+    if op == "wake_register":
+        return h.wake_register(caller_id(h, ag), x.get("trigger"), x.get("session"))
+    if op == "wake_verify":
+        return h.wake_verify(caller_id(h, ag), x.get("trigger"), x.get("prompt"), x.get("enabled"), x.get("session"), x.get("kind"),
+                             x.get("run_at"))
+    if op == "wake_disabled":
+        return h.wake_disabled(caller_id(h, ag), x.get("trigger"))
     if op == "pin_corpus_index":   # 0.15.1 (P3): envoy role direct, anyone else an approval request
         st = h.state()
         cid = h.resolve(st, ag, follow=False)
@@ -704,7 +729,7 @@ def _call(h, name, a):
             return dict(r_, deduped=True) if isinstance(r_, dict) else r_
         r_ = with_note(h, a, h.send(a["agent"], a["to"], a["body"], a.get("subject"), a.get("kind", "message"), a.get("thread"),
                       a.get("reply_to"), a.get("refs"), a.get("priority", "normal"), a.get("max_hops"),
-                      a.get("expects_reply", False)))
+                      a.get("expects_reply", False), ids_check=True))     # 0.24.0 item 1: unknown ids refuse a send
         r_ = doorbell.attach_nudge(h, a["agent"], r_)     # 0.15.5 (WP4): ids-only nudge for the sender to push
         import notify
         r_ = notify.attach_send(h, a["agent"], r_)       # 0.21.0 (A-ae352 item 1): the push Do-line, decided by the harness
@@ -743,7 +768,8 @@ def _call(h, name, a):
             if not str(a.get(k_) or "").strip():
                 raise H.HarnessError(f"harness_record: {k_} required" + (" (decision|context|capsule|note)" if k_ == "kind" else ""))
         return h.record(a["agent"], a["kind"], a["title"], a.get("body", ""), a.get("tags"), a.get("project"),
-                        a.get("refs"), a.get("supersedes"), a.get("offload", False), a.get("role"), a.get("tier"), tag_check=True)   # 0.20.0 item 3
+                        a.get("refs"), a.get("supersedes"), a.get("offload", False), a.get("role"), a.get("tier"), tag_check=True,   # 0.20.0 item 3
+                        ids_check=True)   # 0.24.0 item 1
     if name == "harness_recall" and a.get("kind") == "transcript":
         return transcript_recall(h, a)
     if name == "harness_recall" and a.get("kind") == "vault":
@@ -797,7 +823,7 @@ def _call(h, name, a):
         return with_extras(h, r["short"], r, False) if isinstance(r, dict) and r.get("short") else r
     if name == "harness_handoff":
         return (h.handoff(a["agent"], a.get("capsule_md"), a.get("to"), a.get("release", False), a.get("state_note"),
-                          gate_override=a.get("gate_override")))
+                          gate_override=a.get("gate_override"), ids_check=True))   # 0.24.0 item 1: write and flag
 
     if name == "harness_verify":
         return h.verify()

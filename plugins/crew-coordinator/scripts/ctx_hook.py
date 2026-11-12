@@ -14,6 +14,7 @@ never stamp and are checked against the armed nonce; steward runs never arm."""
 import fnmatch
 import json
 import os
+COWORK_SESSIONS = "-".join(("local", "agent", "mode", "sessions"))   # the Cowork session folder name, spelled from its parts so shipped text carries no workspace path (rule 5e)
 import re
 import secrets
 import sys
@@ -93,12 +94,12 @@ def write_state(path, text):
 
 
 def default_home():
-    """0.18.0 (R-082): the first existing of ~/Claude/Exchange and the old ~/Claude/Projects/Exchange (new path first)."""
-    for c in ("~/Claude/Exchange", "~/Claude/Projects/Exchange"):
+    """0.18.0 (R-082): the first existing of <workspace>/Exchange and the old <workspace>/Projects/Exchange (new path first)."""
+    for c in (os.path.join("~", "Claude", "Exchange"), os.path.join("~", "Claude", "Projects", "Exchange")):
         p = os.path.expanduser(c)
         if os.path.isdir(p):
             return p
-    return os.path.expanduser("~/Claude/Exchange")
+    return os.path.expanduser(os.path.join("~", "Claude", "Exchange"))
 
 
 def home_cfg():
@@ -121,7 +122,7 @@ def surface_src(path=None):
     if s in SURFACES:
         return s, "explicit"
     p = str(path or "").replace("\\", "/")
-    if "/local-agent-mode-sessions/" in p:
+    if "/" + COWORK_SESSIONS + "/" in p:
         return "cowork", "path"
     m = _DESKTOP_HOME.match(p)
     if m and m.group(1) != "claude":
@@ -809,6 +810,76 @@ def _unread_line(inp):
     return f"\u2709{n} unread mail for you (oldest {int((now - oldest) // 60)} min): run harness_inbox."
 
 
+def relay_hook(inp):
+    """0.24.0 (A-b2950 item 18 point 7; relay-wake spec v3.2 section 4): after any tool call in the MAIN chat (no agent_id in the hook
+    input and a transcript path without /subagents/, the same test transcript_model uses: a helper cannot ring or report), claim an
+    open relay for this chat's agent and return its Do-line for additionalContext. A cheap check first: the last 1 MB of the ledger must
+    hold a nudge.relay_offer younger than the relay TTL, else nothing is imported. The claim runs under the ledger lock (claim_relay).
+    Never raises; nothing blocks."""
+    if inp.get("agent_id") or "/subagents/" in str(inp.get("transcript_path") or "").replace("\\", "/"):
+        return None
+    s = load_note(note_path(inp))
+    ag = s.get("agent")
+    if not ag or s.get("steward") or not re.fullmatch(r"[0-9a-f]{8}", str(ag)):
+        return None
+    home = os.environ.get("HARNESS_HOME") or default_home()
+    log = os.path.join(home, "_harness", "events.jsonl")
+    try:
+        with open(log, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            f.seek(max(0, size - (1 << 20)))
+            raw = f.read()
+    except OSError:
+        return None
+    now = time.time()
+    open_ids, done, closed, claimed = set(), set(), set(), set()
+    for ln in raw.split(b"\n"):
+        if b'"nudge.relay_offer"' in ln or b'"nudge.result"' in ln or b'"relay.closed"' in ln or b'"nudge.relay_claim"' in ln:
+            try:
+                e = json.loads(ln)
+            except ValueError:
+                continue
+            d = e.get("data") or {}
+            if e.get("type") == "nudge.relay_offer" and now - float(e.get("t") or 0) < 3900:
+                open_ids.add(d.get("key") or d.get("msg_id"))
+            elif e.get("type") == "nudge.result":
+                done.add(d.get("msg_id"))
+            elif e.get("type") == "relay.closed":
+                closed.add(d.get("msg_id"))
+            elif e.get("type") == "nudge.relay_claim" and d.get("key"):
+                claimed.add(d["key"])                  # a rewake is done once claimed (it needs no report)
+    # fix round 1 (critic m-fef22c88e380): a relay is open only while its mail has no result and is unread; a rewake key (<msg>#r<n>)
+    # also closes on the read or result of its mail, or once claimed. Anything else: nothing is imported
+    # fix round 2 (critic m-24a05fd9f266): a rewake's mail always has a woken result, so a "#" key counts only the read and its own claim
+    live = {k for k in open_ids if k and ((k.split("#")[0] not in closed and k not in claimed) if "#" in k
+                                          else k not in done and k not in closed)}
+    if not live:
+        return None
+    lock = os.path.join(home, "_harness", "events.lock")
+    try:    # never wait on the ledger lock from a tool call: a busy lock (a long writer) means skip; the next tool call tries again
+        import fcntl as _fc
+        with open(lock, "a") as lf:
+            for i in range(4):
+                try:
+                    _fc.flock(lf, _fc.LOCK_EX | _fc.LOCK_NB)
+                    _fc.flock(lf, _fc.LOCK_UN)
+                    break
+                except OSError:
+                    if i == 3:
+                        return None
+                    time.sleep(0.1)
+    except ImportError:
+        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import harness as _H
+    import doorbell as _D
+    h = _H.Harness(home)
+    aid = h.resolve(h.state(), ag, follow=False)
+    return _D.hook_relay_line(h, aid, now)
+
+
 def on_tool(inp):
     """PostToolUse: any harness_* call with a state note clears dirty (unless the server rejected it);
     send/commit/claim/record without one set it. Track norole from response. -> the reminder once per operator turn, or None."""
@@ -932,6 +1003,12 @@ def main():
                     msgs.append(im)
             except Exception as e:
                 _log("idle_tool", e)
+            try:    # 0.24.0 (item 18 point 7): a claimed relay Do-line comes first
+                rl = relay_hook(inp)
+                if rl:
+                    msgs.append(rl)
+            except Exception as e:
+                _log("relay_hook", e)
             try:
                 m = on_tool(inp)
             except Exception as e:

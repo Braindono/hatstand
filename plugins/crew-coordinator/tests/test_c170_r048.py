@@ -46,6 +46,7 @@ class Hatstand(unittest.TestCase):
         git("add", "-A", cwd=seed)
         git("commit", "-q", "-m", "seed", cwd=seed)
         git("push", "-q", self.bare, "main", cwd=seed)
+        _env.hatstand_hooks(self.tmp, self.home, os.path.join(self.tmp, "gitconfig"))   # 0.24.0 item 17: hooks on, as installed
         e = mock.patch.dict(os.environ, {"HARNESS_STATE_CACHE": "0", "HATSTAND_REPO": "file://" + self.bare,
                                          "GIT_CONFIG_GLOBAL": os.path.join(self.tmp, "gitconfig")})
         e.start()

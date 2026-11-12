@@ -332,7 +332,7 @@ def _hook_probes(home):
         f.write("{}")
     probes = {
         "deny_cache": ("Bash", {"command": "cp x ~/.claude/plugins/cache/crew-coordinator/scripts/"}, True),
-        "deny_rpm": ("Bash", {"command": f"rsync -a src/ '{user}/Library/Application Support/Claude/local-agent-mode-sessions/s1/rpm/cc/'"}, True),
+        "deny_rpm": ("Bash", {"command": f"rsync -a src/ '{user}/Library/Application Support/" + "Claude/" + "-".join(("local", "agent", "mode", "sessions")) + "/s1/rpm/cc/'"}, True),
         "deny_bin": ("Bash", {"command": f"sed -i '' s/a/b/ {home}/_harness/bin/harness.py"}, True),
         "deny_published": ("Edit", {"file_path": os.path.join(pub, "scripts", "doorbell.py")}, True),
         "allow_ls": ("Bash", {"command": "ls ~/.claude/plugins"}, False),

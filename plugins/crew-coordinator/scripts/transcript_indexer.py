@@ -2,10 +2,10 @@
 """Local transcript indexer (stdlib only, zero model tokens).
 
 Reads Claude Code session transcripts (~/.claude/projects/*/<session>.jsonl), keeps what the operator typed and what
-the assistant said, redacts secrets, writes plain-text vault files under ~/Claude/Transcripts.noindex and keeps a rebuildable
+the assistant said, redacts secrets, writes plain-text vault files under <workspace>/Transcripts.noindex and keeps a rebuildable
 SQLite FTS5 index under ~/.cache/harness-indexer. Conditions from the envoy's privacy check (m-312a43bd0faa):
 
-  * per-host, outside Exchange, never synced: root ~/Claude/Transcripts.noindex (0.17.0; the old ~/Claude/Transcripts is
+  * per-host, outside Exchange, never synced: root <workspace>/Transcripts.noindex (0.17.0; the old <workspace>/Transcripts is
     renamed by `install` and left as a symlink for one release), dirs 0700, files 0600
   * default-deny: only sessions the harness registered (ledger session.bound / agent.registered) or listed in the
     operator's allow-list file <root>/.allow are written; everything else is counted and skipped
@@ -13,7 +13,7 @@ SQLite FTS5 index under ~/.cache/harness-indexer. Conditions from the envoy's pr
   * vault text is data: every file starts with an UNTRUSTED header and the body sits inside a fence
   * Spotlight: the *.noindex folder name keeps it out; `spotlight off` also writes the .metadata_never_index marker and
     probes with mdfind, warning when Spotlight still indexes the folder (the marker alone is ignored on macOS 26.7.1)
-  * purge is an operator shell command only (no MCP tool); `install` copies this script to ~/Claude/scripts and loads a
+  * purge is an operator shell command only (no MCP tool); `install` copies this script to <workspace>/scripts and loads a
     launch agent (operator rulings D-8b925); `uninstall` unloads it and keeps transcripts and index; `plist` prints only
 
 Commands: once | run | status | search <terms> | spotlight on|off | purge --session ID|--all [--vault] --yes | plist | install | uninstall | wiki
@@ -116,7 +116,7 @@ def source_dir():
 
 
 def exchange_log():
-    """0.18.0 (R-082): the first existing ledger of ~/Claude/Exchange, then the old ~/Claude/Projects/Exchange."""
+    """0.18.0 (R-082): the first existing ledger of <workspace>/Exchange, then the old <workspace>/Projects/Exchange."""
     if os.environ.get("INDEXER_LEDGER"):
         return os.environ["INDEXER_LEDGER"]
     cands = [os.path.join(home(), "Claude", "Exchange", "_harness", "events.jsonl"),

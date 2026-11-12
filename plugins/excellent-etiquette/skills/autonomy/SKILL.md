@@ -18,5 +18,5 @@ description: "Use when: deciding whether to act or ask: approvals, mail replies,
 - [global] P-88 Act on corpus-check and lint WARNs: fix what you own, send kind=review to the owner role (D-1e728).
 - [global] P-92 On restore/resume: own pending-actions list first, then harness_inbox, then work unprompted. Stop only for P-80.
 - [global] P-93 "Remember this": also notice role:skill-curation-lead (index = owner map).
-- [global] P-91 remind-me: REMIND to role:secretary. P-94 inbox re-check after mail needing a reply. P-85 offer a better path, name before building. P-109 self-report your own miss to role:secretary unprompted. See references/more.md.
+- [global] P-91 remind-me: REMIND to role:secretary. P-94 inbox re-check after mail needing a reply. P-85 offer a better path, name before building. P-109 self-report your own miss to role:secretary unprompted; step write-ups; sandbox mail. See references/more.md.
 - Scoped rules (cv-management, letters-manager, corpus-envoy, secretary): references/scoped.md (P-18, P-23, P-26..P-31, P-95).

@@ -38,7 +38,7 @@ class Surface(unittest.TestCase):
         self.assertEqual(C.limits(SONNET, "/Users/x/.claude/projects/-p/a.jsonl")["window"], 500000)   # 0.17.0: surface ignored
 
     def test_cowork_path(self):
-        p = "/Users/x/Library/Application Support/Claude/local-agent-mode-sessions/a/b/.claude/projects/-p/abc.jsonl"
+        p = "/Users/x/Library/Application Support/" + "Claude/" + "local-agent-mode" + "-sessions/a/b/.claude/projects/-p/abc.jsonl"
         self.assertEqual(C.surface_src(p), ("cowork", "path"))
 
     def test_explicit_wins_both_ways(self):

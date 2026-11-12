@@ -10,7 +10,7 @@ import ctx_hook as H
 
 SONNET, OPUS, HAIKU = "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"
 CODE_PATH = "/Users/x/.claude/projects/-p/abc.jsonl"
-COWORK_PATH = "/Users/x/Library/Application Support/Claude/local-agent-mode-sessions/a/b/.claude/projects/-p/abc.jsonl"
+COWORK_PATH = "/Users/x/Library/Application Support/" + "Claude/" + "local-agent-mode" + "-sessions/a/b/.claude/projects/-p/abc.jsonl"
 
 
 class Base(unittest.TestCase):

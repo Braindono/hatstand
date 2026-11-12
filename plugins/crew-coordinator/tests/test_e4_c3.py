@@ -136,7 +136,7 @@ class C3(Base):
             r = I.queue(self.h, self.a, text)
             self.assertTrue(r["skipped"].startswith("filtered"), (name, r))
         self.assertEqual(self.notices(), [])
-        self.assertEqual(I.blocked_by("remember this: prefer short sentences. See /Users/btf/Claude/Projects/Exchange/x.md"), [])
+        self.assertEqual(I.blocked_by("remember this: prefer short sentences. See /Users/x/Claude/Projects/Exchange/x.md"), [])
 
     def test_kept_when_no_live_secretary(self):
         self.h.retire(self.sec, by=self.sec)
@@ -179,7 +179,7 @@ class C2Intake(Base):
         r = subprocess.run([sys.executable, "-B", os.path.join(SCRIPTS, "harness.py"), "--home", self.home,
                             "intake", "--agent", a[:8], "--text", "skill idea one"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("ops-coder: skill idea one", open(os.path.join(self.home, "btf_skills_repository", "INTAKE.md")).read())
+        self.assertIn("ops-coder: skill idea one", open(os.path.join(self.home, "skills_repository", "INTAKE.md")).read())
 
 
 class RestoreSkill(unittest.TestCase):

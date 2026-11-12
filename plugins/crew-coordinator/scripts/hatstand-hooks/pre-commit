@@ -1,0 +1,5 @@
+#!/bin/sh
+# Hatstand pre-commit hook (crew-coordinator 0.24.0, guard spec v3): checks the staged blobs. Installed outside any repo and
+# switched on for every clone of the remote by a global includeIf; the checker sits beside this file.
+here="$(cd "$(dirname "$0")" && pwd)"
+exec python3 -I -B "$here/hatstand_check.py" staged "$(git rev-parse --show-toplevel)"

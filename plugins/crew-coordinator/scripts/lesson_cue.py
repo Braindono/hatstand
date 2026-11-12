@@ -12,7 +12,7 @@ A note adds non-blocking additionalContext "Lesson <id>: <cue>"; mode "deny" (pe
 tool call with the cue as the reason (PreToolUse only).
 
 Files (interface agreed with the curator, m-4b5bcb59d88e and m-fb883a335780; <home> = HARNESS_HOME, else
-~/Claude/Exchange, else ~/Claude/Projects/Exchange):
+<workspace>/Exchange, else <workspace>/Projects/Exchange):
   trigger file  <home>/_harness/data/lesson_triggers.json
                 {"v": 1, "max_per_session": 3, "entries": [{"id": "N-xxxxx", "tool": "^(Bash)$", "input": "(?i)ctx",
                  "cue": "<=40 tokens", "mode": "note|deny", "on": "tool|prompt"}]}   at most 30 entries
@@ -45,7 +45,7 @@ def home():
     e = (os.environ.get("HARNESS_HOME") or "").strip()
     if e:
         return os.path.abspath(os.path.expanduser(e))
-    for c in ("~/Claude/Exchange", "~/Claude/Projects/Exchange"):
+    for c in (os.path.join("~", "Claude", "Exchange"), os.path.join("~", "Claude", "Projects", "Exchange")):
         p = os.path.expanduser(c)
         if os.path.isdir(p):
             return p

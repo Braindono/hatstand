@@ -3,8 +3,9 @@
 wake.py set <role> <trig_id> --kind recurring|run_once --prompt-file FILE | get <role> | clear <role> | clear --stale
   role without the 'role:' prefix. The entry is {trigger, kind, prompt}: the file must hold exactly the wake template with the role filled in
   (anything else is refused). 0.23.0: a plain trig_ string (the legacy form) is refused.
-  clear --stale removes every entry that is not a trig_ id (no approval needed). The file is only the operator's proposal: nothing is live until
-  the operator approves harness_admin op=wake_pin."""
+  clear --stale removes every entry that is not a trig_ id (no approval needed). 0.24.0 (A-b2950 item 13, D-8ef51): nothing pins from this
+  file any more and no operator step exists; a role's holder registers its own routine (harness_admin op=wake_register) and a Code relay
+  holder verifies it. Pins approved before 0.24 stay readable until stale."""
 import json, os, re, sys
 try: import fcntl
 except ImportError: fcntl = None      # Windows: no lock, same as before

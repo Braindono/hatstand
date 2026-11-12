@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.14 (2026-11-11): operator rules in the skills, path scrub
+Scope items (verbatim):
+- Scrub (communication and continuity references/more.md, cv-writing/SKILL.md, CHANGELOG.md): no user name, full name, home path or workspace path ships; the 0.24 hatstand guard passes
+- Operator steps (communication and autonomy SKILL.md): his steps go to role:secretary's Hub queue, dry run first, not asked in a role's chat; if he asks in a chat, answer there and log it
+- Step write-ups (skills/autonomy/SKILL.md): each install or settings step for the operator gets a full Hub write-up (what, why, before/after, risk, steps, check, undo); secretary alerts him
+- Sandbox block (skills/autonomy/SKILL.md): a blocked shell command is not retried outside the sandbox; mail role:secretary kind=task: role, blocked host or path, purpose, work stopped or not
+- Tables (skills/communication/SKILL.md): every table shown to the operator starts with a column of A-Z or 0-9 row labels, one scheme per table, kept stable when the table is shown again
+- Explain, don't point (skills/plugins/SKILL.md): plugin code, docs and runtime text state the rule and its reason in words, never a record id; ids go only in private commit messages
+
+Ships with crew-coordinator 0.24.0. The new rules are written in words, with no rule number and no record id.
+
 ## 0.2.13 (2026-11-09)
 Scope (operator-approved, record A-5bdd3, 11-09; replaces A-d7cad and A-0e3d1): Communication skill: never hand the operator bare codes (R1-R14, W45, hk3); say it in words, with where and how to answer; code in parentheses; one example; Delegation skill: one line, do not sit idle over 5 minutes while helpers work (prompt cache); one static model-routing table (Haiku, Sonnet, Opus), under 150 tokens; P-111 amended (D-90d53): an idea the operator tells you is mailed once to role:secretary and recorded kind=note tags=[idea] the same turn; recall first, skip if already noted; work never waits; Ponytail phase 1, own words: six-rung smallest-change ladder in delegation/references/smallest-change.md plus a pointer line; callers-first line; lean pass and cost-of-skipping line in the review checklist; One line in the plugins skill (D-9d5a7): a shared repo is inspected, adapted not installed, in phases; CHANGELOG and reference header credit DietrichGebert/ponytail (MIT); Meaning-preserving tightening of the existing lines listed in the spec, no rule dropped, only to fit 600 tokens; P-99, P-102, P-103 untouched; the critic checks each clause by script; Stop rule: a critic blocker gets one fix round; a dropped clause in round 2 drops the tightening and ships 0.2.13 without the codes rule and the P-111 amendment; bodies stay under 600 tokens
 - Communication skill: never hand the operator bare codes (R1-R14, W45, hk3); say it in words, with where and how to answer; code in parentheses; one example
@@ -60,7 +71,7 @@ Scope (operator-approved, W43 E1): Autonomy P-80 and P-81 release-scope rule
 ## 0.2.7 (2026-10-20)
 - communication P-98 (computer:// markdown links for local paths), P-99 (operator commands in one fenced block, one line), P-100 (one status line while waiting on an agent).
 - autonomy P-17 extended: routine agent-to-agent correspondence needs no operator prompt (D-c9982).
-- continuity P-101 (lowercase-with-dashes project folders; ~/Claude/Code/harness-ops/projects/<project>/ after the 2026-10-14 cutover).
+- continuity P-101 (lowercase-with-dashes project folders; harness-ops/projects/<project>/ after the 2026-10-14 cutover).
 - index lists P-98..P-101; "Remember this" path now harness-ops/projects/skill-curation/review/etiquette-inventory.md.
 
 ## 0.2.6 (2026-10-08)

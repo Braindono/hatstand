@@ -1,4 +1,4 @@
-"""cc 0.17.0 R-087 (operator idea fzj12n): ~/Claude/scripts launchers (no moves) and the delete-site changes
+"""cc 0.17.0 R-087 (operator idea fzj12n): <workspace>/scripts launchers (no moves) and the delete-site changes
 (USER-DATA deletes become archive moves). Run: python3 -B tests/test_c170_r087.py"""
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
@@ -63,7 +63,7 @@ class Launchers(unittest.TestCase):
 
     def test_missing_and_outside_targets_skipped(self):
         os.remove(self.made[0]) if self.made else None
-        res = LN.plan(self.ex, self.dest, {"operator_launchers": {"evil": "/tmp/evil.py", "mine": "~/Claude/Code/x/y.py"}})
+        res = LN.plan(self.ex, self.dest, {"operator_launchers": {"evil": "/tmp/evil.py", "mine": os.path.join("~", "Claude", "Code", "x", "y.py")}})
         self.assertTrue(any(s.startswith("evil: outside") for s in res["skipped"]))
         self.assertTrue(any(s.startswith("mine: target missing") for s in res["skipped"]))
         self.assertNotIn("evil", res["write"])

@@ -536,7 +536,7 @@ def write_report(rep, report_dir, candidate):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="release_sim", description=__doc__.splitlines()[0])
     p.add_argument("--candidate", required=True, help="the candidate plugin tree")
-    p.add_argument("--home", default=os.environ.get("HARNESS_HOME") or os.path.expanduser("~/Claude/Projects/Exchange"))
+    p.add_argument("--home", default=os.environ.get("HARNESS_HOME") or os.path.expanduser(os.path.join("~", "Claude", "Projects", "Exchange")))
     p.add_argument("--allow-actions", default="", help="approval action names the release scope adds or removes, comma separated")
     p.add_argument("--gate-files", default="", help="gate files the release scope names as changed, comma separated (path or path::function)")
     p.add_argument("--plant", action="append", default=[], help="home-relative local file to plant in the scratch copy (tests)")

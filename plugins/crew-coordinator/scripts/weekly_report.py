@@ -10,6 +10,8 @@ One markdown page plus a JSON twin (health-<week>_<date>.md/.json), written to <
   5. Steward: passes in the window, findings, exit codes, live tokens first -> last, tokens saved (trend.jsonl)
   6. Releases: count, per plugin, split ratio (releases per released plugin)
   7. Handoffs and auto-restores
+  8. Wake measures (0.24.0, A-b2950 item 16): read time per direction, mail unread after 30 s / 15 min / 1 h per direction, misses,
+     relays per sender-recipient pair (flag over 15 in an hour), tokens of a woken Cowork turn (coverage), roles handed off over 24 h
 Each number that has a value in the previous report's JSON shows its change.
 
   python3 weekly_report.py [--home EXCHANGE] [--days 7] [--out-dir DIR] [--now ISO]   (prints the page path)"""
@@ -122,6 +124,118 @@ def steward_stats(trend_path, since, until):
             "saved": sum(int(r.get("saved") or 0) for r in rows), "last": str(rows[-1].get("ts"))[:16]}
 
 
+def all_events(home):
+    """Every ledger event, read straight from the file (no Harness: it writes). Needed to fold State for directions and holders."""
+    out = []
+    with open(os.path.join(home, "_harness", "events.jsonl"), "rb") as f:
+        for line in f:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict):
+                out.append(e)
+    return out
+
+
+WAKE_UNREAD_S = (("30s", 30), ("15min", 900), ("1h", 3600))
+RELAY_PAIR_HOUR_FLAG = 15          # relay-wake spec v3.2 section 4 point 7: the loop guard's weekly flag
+CTX_PAIR_MAX_S = 600               # item 16 nb (critic m-a5eed50a7177): a ctx delta counts only when the next report is within 10 min
+
+
+def _median(xs):
+    xs = sorted(x for x in xs if isinstance(x, (int, float)))
+    if not xs:
+        return None
+    n = len(xs)
+    return xs[n // 2] if n % 2 else round((xs[n // 2 - 1] + xs[n // 2]) / 2, 1)
+
+
+def wake_stats(events, since_t, until_t):
+    """0.24.0 (A-b2950 item 16; relay-wake spec v3.2 sections 1, 4, 5): read-only over the whole ledger (a State folded here, never
+    through Harness). Window: events with since_t <= t < until_t."""
+    import harness as H
+    import doorbell as D
+    st = H.State(events)
+    win = [e for e in events if since_t <= float(e.get("t") or 0) < until_t]
+    d_ = lambda e: e.get("data") or {}
+    # 1. wake.measure per direction; tokens of a woken Cowork turn = the reader's next reported ctx after the read minus ctx_before
+    synced = collections.defaultdict(list)
+    for e in events:
+        if e.get("type") == "agent.synced" and isinstance(d_(e).get("ctx"), int):
+            synced[e.get("actor")].append((float(e.get("t") or 0), d_(e)["ctx"]))
+    per = collections.defaultdict(lambda: {"reads": 0, "from_sent": [], "from_fire": [], "ctx_deltas": [], "ctx_dropped": 0})
+    for e in win:
+        if e.get("type") != "wake.measure":
+            continue
+        d = d_(e)
+        p = per[d.get("direction") or "?"]
+        p["reads"] += 1
+        p["from_sent"].append(d.get("seconds_from_sent"))
+        p["from_fire"].append(d.get("seconds_from_fire"))
+        rt = float(d.get("read_t") or 0)
+        nxt = next(((t, c) for t, c in synced.get(d.get("reader"), ()) if t > rt), None)
+        if isinstance(d.get("ctx_before"), int) and nxt is not None:
+            delta = nxt[1] - d["ctx_before"]
+            if delta < 0 or nxt[0] - rt > CTX_PAIR_MAX_S:      # a compaction, or many turns later: not this turn's tokens
+                p["ctx_dropped"] += 1
+            else:
+                p["ctx_deltas"].append(delta)
+    measures = {k: {"reads": v["reads"], "median_s_from_sent": _median(v["from_sent"]), "median_s_from_fire": _median(v["from_fire"]),
+                    "ctx_coverage": round(len(v["ctx_deltas"]) / v["reads"], 2) if v["reads"] else None,
+                    "median_ctx_delta": _median(v["ctx_deltas"]), "ctx_dropped": v["ctx_dropped"]} for k, v in sorted(per.items())}
+    # 2. answer-kind mail offered in the window: unread after 30 s, 15 min, 1 h, per direction (only once that much time has passed)
+    reads = collections.defaultdict(list)
+    for e in events:
+        if e.get("type") == "message.read":
+            for mid in d_(e).get("ids") or []:
+                reads[mid].append((e.get("actor"), float(e.get("t") or 0)))
+    unread = collections.defaultdict(lambda: {k: 0 for k, _ in WAKE_UNREAD_S} | {"offered": 0})
+    for e in win:
+        if e.get("type") not in D.OFFERS:
+            continue
+        d = d_(e)
+        mid = d.get("msg_id") or d.get("msg")
+        m = st.messages.get(mid) or {}
+        if m.get("kind") not in D.RING_KINDS:
+            continue
+        sent_t = float(e.get("t") or 0)
+        for rid in d.get("to") or []:
+            ids = set(st.lineage(rid)) | {rid} | {a for a in st.agents if rid in set(st.lineage(a))}
+            first = min((t for a, t in reads.get(mid, ()) if a in ids), default=None)
+            u = unread[D.direction(st, d.get("from"), rid)]
+            u["offered"] += 1
+            for k, sec in WAKE_UNREAD_S:
+                if until_t - sent_t >= sec and (first is None or first - sent_t > sec):
+                    u[k] += 1
+    # 3. misses per direction; relays per sender-recipient pair, flagged over RELAY_PAIR_HOUR_FLAG in one hour
+    misses = collections.Counter(D.direction(st, d_(e).get("from"), d_(e).get("to")) for e in win if e.get("type") == "nudge.miss")
+    pairs, times = collections.Counter(), collections.defaultdict(list)
+    for e in win:
+        if e.get("type") == "nudge.relay_offer":
+            k = (str(d_(e).get("from"))[:8], str(d_(e).get("to"))[:8])
+            pairs[k] += 1
+            times[k].append(float(e.get("t") or 0))
+
+    def _max_in_hour(ts):          # a sliding hour, not a clock hour (a burst across the hour mark still counts)
+        ts, best, j = sorted(ts), 0, 0
+        for i, t in enumerate(ts):
+            while t - ts[j] >= 3600:
+                j += 1
+            best = max(best, i - j + 1)
+        return best
+    flagged = sorted(k for k, ts in times.items() if _max_in_hour(ts) > RELAY_PAIR_HOUR_FLAG)
+    # 4. roles handed off over 24 h (no live holder since): role, since (critic m-a8198b08d081, envoy m-c50eb489657a)
+    gone = []
+    for role, ho in sorted((getattr(st, "role_handoffs", None) or {}).items()):
+        hol = st.role_holder(role)
+        if (not hol or (st.agents.get(hol) or {}).get("handed_off")) and ho.get("t") and until_t - float(ho["t"]) > 86400:
+            gone.append({"role": role, "since": D._when(ho["t"]), "capsule": ho.get("capsule")})
+    return {"measures": measures, "unread": {k: dict(v) for k, v in sorted(unread.items())}, "misses": dict(sorted(misses.items())),
+            "relay_pairs": {"%s>%s" % k: n for k, n in sorted(pairs.items())}, "relay_pairs_flagged": ["%s>%s" % k for k in flagged],
+            "handed_off_over_24h": gone}
+
+
 def mail_stats(home):
     res = LM.run(home, scripts=HERE)
     roles = {r: {k: v.get(k) for k in ("holder", "unread", "owed", "digest_head_tokens", "digest_tokens", "pinned_visible",
@@ -148,6 +262,33 @@ def _chg(cur, prev):
         return ""
     dlt = cur - prev
     return "" if dlt == 0 else (" (+%s)" % dlt if dlt > 0 else " (%s)" % dlt)
+
+
+def render_wake(w):
+    """0.24.0 (item 16): section 8 lines, or none when the wake stats failed or are absent."""
+    L = []
+    if not w:
+        return L
+    L += ["## 8. Wake measures", "| direction | rung or woken reads | median s from sent | median s from fire | ctx coverage | ctx pairs dropped "
+          "| median ctx delta |", "|---|---|---|---|---|---|---|"]
+    for k, v in w["measures"].items():
+        L.append(f"| {k} | {v['reads']} | {v['median_s_from_sent']} | {v['median_s_from_fire']} | {v['ctx_coverage']} | {v.get('ctx_dropped', 0)} "
+                 f"| {v['median_ctx_delta']} |")
+    if not w["measures"]:
+        L.append("| none | 0 | - | - | - | - | - |")
+    L += ["", "| direction | task/question/review offered | unread after 30 s | 15 min | 1 h | misses |", "|---|---|---|---|---|---|"]
+    for k in sorted(set(w["unread"]) | set(w["misses"])):
+        u = w["unread"].get(k) or {}
+        L.append(f"| {k} | {u.get('offered', 0)} | {u.get('30s', 0)} | {u.get('15min', 0)} | {u.get('1h', 0)} | {w['misses'].get(k, 0)} |")
+    L.append("- relays per sender>recipient: " + (", ".join(f"{k} {n}" for k, n in w["relay_pairs"].items()) or "none")
+             + (f"; over {RELAY_PAIR_HOUR_FLAG} in one hour: " + ", ".join(w["relay_pairs_flagged"]) if w["relay_pairs_flagged"] else ""))
+    L.append("- handed_off over 24 h: " + ("; ".join(f"role:{g['role']} since {g['since']}" for g in w["handed_off_over_24h"]) or "none"))
+    L.append(f"- ctx coverage is the share of rung or woken reads whose reader reported ctx before the read and again within "
+             f"{CTX_PAIR_MAX_S // 60} min after it; a pair with a later report or a drop in ctx (a compaction) is left out and counted as "
+             "dropped. Expected low for Cowork. The delta is self-reported and an upper bound on the woken turn's tokens. Seconds from the "
+             "fire are a lower bound (fired_t is the woken report).")
+    L.append("")
+    return L
 
 
 def render(r, prev):
@@ -205,6 +346,7 @@ def render(r, prev):
           "- " + ("; ".join(rl["versions"]) or "none"),
           "", "## 7. Handoffs",
           f"- handoffs {h['handed_off']}{_chg(h['handed_off'], P('ledger', 'handoffs', 'handed_off'))}, auto-restores {h['auto_restores']}", ""]
+    L += render_wake(r.get("wake"))
     return "\n".join(L)
 
 
@@ -222,12 +364,17 @@ def report(home, out_dir, days=7, now=None, trend_path=None, indexer_state=None)
     iso = until.isocalendar()
     week = f"{iso[0]}-W{iso[1]:02d}"
     name = f"{PREFIX}{week}_{until.strftime('%Y-%m-%d')}"   # one file per day; a rerun the same day replaces it
-    ops = os.environ.get("HARNESS_OPS_ROOT") or os.path.expanduser("~/Claude/Code/harness-ops")
+    ops = os.environ.get("HARNESS_OPS_ROOT") or os.path.expanduser(os.path.join("~", "Claude", "Code", "harness-ops"))
     trend_path = trend_path or os.path.join(ops, "projects", "orchestration", "digests", "trend.jsonl")
     r = {"name": name, "week": week, "since": since.isoformat(), "until": until.isoformat(),
          "generated": dt.datetime.now(dt.timezone.utc).isoformat(), "days": days,
          "mail": mail_stats(home), "ledger": ledger_stats(ledger_events(home, since, until)),
          "indexer": indexer_stats(indexer_state), "steward": steward_stats(trend_path, since, until)}
+    try:    # 0.24.0 (A-b2950 item 16)
+        r["wake"] = wake_stats(all_events(home), since.timestamp(), until.timestamp())
+    except Exception as e:
+        r["wake"] = None
+        r["wake_error"] = f"{type(e).__name__}: {e}"[:200]
     os.makedirs(out_dir, exist_ok=True)
     prev = previous(out_dir, name)
     md, js = os.path.join(out_dir, name + ".md"), os.path.join(out_dir, name + ".json")
@@ -242,12 +389,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="harness weekly health report (zero model tokens)")
     ap.add_argument("--home", help="Exchange folder (default: HARNESS_HOME or the usual location); only read")
     ap.add_argument("--days", type=int, default=7)
-    ap.add_argument("--out-dir", help="default: <HARNESS_OPS_ROOT or ~/Claude/Code/harness-ops>/projects/orchestration/digests/weekly")
+    ap.add_argument("--out-dir", help="default: <HARNESS_OPS_ROOT or <workspace>/Code/harness-ops>/projects/orchestration/digests/weekly")
     ap.add_argument("--now", help="end of the window, ISO time (default: now)")
     a = ap.parse_args(argv)
     import harness as H
     home = a.home or H.resolve_home()
-    ops = os.environ.get("HARNESS_OPS_ROOT") or os.path.expanduser("~/Claude/Code/harness-ops")
+    ops = os.environ.get("HARNESS_OPS_ROOT") or os.path.expanduser(os.path.join("~", "Claude", "Code", "harness-ops"))
     out = a.out_dir or os.path.join(ops, "projects", "orchestration", "digests", "weekly")
     now = dt.datetime.fromisoformat(a.now.replace("Z", "+00:00")) if a.now else None
     if now and now.tzinfo is None:

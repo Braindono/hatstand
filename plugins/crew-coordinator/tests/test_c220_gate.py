@@ -265,7 +265,8 @@ class Sim(unittest.TestCase):
 
     def test_s4_b1_a_name_at_the_call_site_fails_i3b(self):                            # critic S4 blocker 1 (F3)
         cand = candidate(self.tmp, patch={"scripts/doorbell.py": (
-            '"do": " ; ".join(_do_one(x, g, line, mid) for _, _, x, g in ring)}',
+            # 0.24.0 (item 13): the anchor follows the call site's new fields= argument; the injected fault is the same
+            '"do": " ; ".join(_do_one(x, g, line, mid, fields=bool(g and registered_trigger(st, g))) for _, _, x, g in ring)}',
             '"do": " ; ".join(_do_one(x, g, line, mid) + " " + str(a.get("sobriquet")) for _, a, x, g in ring)}')})
         answer_all(cand)
         self.assertIn("I3b the Do-line carries a name, a ROLE row or a ListAgents check (role-only addressing, D-3e5e7)",
@@ -281,7 +282,7 @@ class Sim(unittest.TestCase):
 
     def test_s4_b2_a_hook_that_drops_the_rpm_path_fails_i9(self):                     # critic S4 blocker 2 (F10)
         cand = candidate(self.tmp, patch={"scripts/release_guard.py": (
-            'if "/local-agent-mode-sessions/" in p and "/rpm/" in p:', 'if False:')})
+            'if "/" + COWORK_SESSIONS + "/" in p and "/rpm/" in p:', 'if False:')})
         answer_all(cand)
         r = self.run_sim(cand)
         self.assertIn("I9 hook probe failed: deny_rpm", r["failed"])
@@ -453,7 +454,7 @@ class Hooks(unittest.TestCase):
     def test_h1_denies_writes_into_installed_copies(self):                          # acceptance test 5
         self.assertIn("H1", self.bash("cp x ~/.claude/plugins/cache/crew-coordinator/scripts/"))
         self.assertIn("H1", self.bash("echo hi > ~/.claude/plugins/cache/a.py"))
-        self.assertIn("H1", self.bash(f"rsync -a src/ '{self.hm}/Library/Application Support/Claude/local-agent-mode-sessions/s1/rpm/cc/'"))
+        self.assertIn("H1", self.bash(f"rsync -a src/ '{self.hm}/Library/Application Support/" + "Claude/" + "local-agent-mode" + "-sessions/s1/rpm/cc/'"))
         self.assertIn("H1", self.bash(f"sed -i '' s/a/b/ {self.home}/_harness/bin/harness.py"))
         self.assertIsNone(self.bash("ls ~/.claude/plugins"))
         self.assertIsNone(self.bash("cp ~/.claude/plugins/cache/a.py /tmp/a.py"))     # copying OUT is fine

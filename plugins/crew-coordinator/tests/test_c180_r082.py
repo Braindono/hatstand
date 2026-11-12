@@ -1,4 +1,4 @@
-"""cc 0.18.0 R-082: the Exchange home moves to ~/Claude/Exchange (D-58543); the old ~/Claude/Projects/Exchange is a
+"""cc 0.18.0 R-082: the Exchange home moves to <workspace>/Exchange (D-58543); the old <workspace>/Projects/Exchange is a
 fallback for one release (after the move: a compatibility symlink). Envoy conditions (m-9490a7305fa7): one key per
 file whatever the spelling (a claim on one spelling blocks the other), real-path containment (a capsule given by the
 old spelling restores after the move), and the suite under /usr/bin/python3 3.9 too.
@@ -58,7 +58,7 @@ class DefaultHome(Base):
     def test_neither_names_all_three(self):
         with self.assertRaises(H.HarnessError) as cm:
             H.resolve_home()
-        for c in ("~/Claude/Exchange", "~/Claude/Projects/Exchange", "~/mnt/Exchange"):
+        for c in (os.path.join("~", "Claude", "Exchange"), os.path.join("~", "Claude", "Projects", "Exchange"), "~/mnt/Exchange"):
             self.assertIn(c, str(cm.exception))
 
     def test_indexer_ledger(self):
@@ -147,7 +147,9 @@ class AfterTheMove(Base):
 
 @unittest.skipUnless(shutil.which("git") and shutil.which("rsync"), "git and rsync needed")
 class SyncDefaultHome(Base):
-    def test_sync_finds_the_new_home_without_harness_home(self):
+    def test_without_harness_home_the_sync_stops_even_when_the_new_home_exists(self):
+        """0.24.0 item 17 supersedes R-082 here: the sync no longer guesses a home from a built-in workspace path (rule 5e
+        refuses that path in shipped code). harness_admin op=hatstand_sync always sets HARNESS_HOME; a direct run must too."""
         self.moved()
         mk = os.path.join(self.new, "_harness", "marketplace")
         os.makedirs(os.path.join(mk, "plugins", "demo", ".claude-plugin"))
@@ -175,8 +177,9 @@ class SyncDefaultHome(Base):
         env.update(HATSTAND_REPO="file://" + bare, GIT_CONFIG_GLOBAL=os.path.join(self.tmp, "gitconfig"))
         r = subprocess.run(["/bin/sh", os.path.join(HERE, "..", "scripts", "hatstand-sync.sh")], capture_output=True,
                            text=True, env=env)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("demo 2.0.0", r.stdout)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("HARNESS_HOME is not set", r.stderr)
+        self.assertNotIn("demo 2.0.0", r.stdout)
 
 
 if __name__ == "__main__":

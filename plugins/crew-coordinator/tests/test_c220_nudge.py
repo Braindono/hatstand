@@ -22,7 +22,36 @@ def WP(role, trig=TRIG, kind="recurring"):
     return {"trigger": trig, "kind": kind, "prompt": D.wake_prompt(role)}
 
 
+def legacy_pin(h, entries):
+    """0.24.0 (A-b2950 item 13): write a wake.pinned event as an operator grant wrote it before 0.24 (the approval path is removed;
+    legacy pins stay readable until stale). Each entry passes the 0.23.0 check, so the shapes the old grant wrote are the only ones."""
+    st = h.state()
+    out = {}
+    for k, v in entries.items():
+        ent = h._wake_entry_ok(k, v, st.role_holder(k))
+        if ent is None:
+            raise H.HarnessError("0.23.0 refused this pin entry too: %r" % (v,))
+        out[k] = ent
+    h.store.append("wake.pinned", "human", {"entries": dict(sorted(out.items()))})
+
+
+def record_v023(h, caller, msg_id, outcome, reason):
+    """0.24.0 (A-b2950 item 3): write a nudge.result as 0.23.0 wrote it (free-text reason, no `status`), so rows from before 0.24.0 replay
+    through the old reader. Relayer evidence in the 0.23.0 shape when the caller is not the sender."""
+    offer = next(e["data"] for e in reversed(h.store.read_all()) if e.get("type") in D.OFFERS and e["data"].get("msg_id", e["data"].get("msg")) == msg_id)
+    why = " ".join(str(reason or "").split())[:80]
+    data = {"msg": msg_id, "msg_id": msg_id, "by": caller, "for": offer.get("from"), "outcome": outcome, "reason": why}
+    if offer.get("from") not in set(h.state().lineage(caller)) | {caller}:
+        ev = D.relay_evidence(why)
+        assert ev, "0.23.0 refused this relayer report too: %r" % reason
+        data["evidence"] = dict(ev, self_reported=True)
+    h.store.append("nudge.result", caller, data)
+
+
 class Base(unittest.TestCase):
+    # 0.24.0 (A-b2950 item 5, envoy m-7ffa2d0bcd3c): every suite runs with item 5 on. A suite that needs back-to-back sends to one
+    # recipient as setup turns off only the nb 6 window (SAME_SESSION_S = 0), named in its setUp (test_c223_relay, test_cc155_doorbell).
+
     def setUp(self):
         m = mock.patch.object(H, "machine_id", lambda: "machine-mac")             # 0.22.1: every sender in these tests is on "the Mac"
         m.start()
@@ -105,7 +134,7 @@ class Item6RoleOnly(Base):
     def test_6g_a_pinned_trigger_with_no_id_gives_the_trigger_line_only(self):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": ""}):
             self.reg("secretary", None)
-        self.h.wake_pin_apply("operator", {"secretary": WP("secretary")})     # 0.23.0 (gap 3, gap 6): dict form, holder registered first
+        legacy_pin(self.h, {"secretary": WP("secretary")})     # 0.23.0 (gap 3, gap 6): dict form, holder registered first
         do = self.send(self.plain, "role:secretary")["nudge"]["do"]
         self.assertTrue(do.startswith("Do: RemoteTrigger action=run trigger_id=" + TRIG))
         self.assertNotIn("SendMessage", do)
@@ -130,8 +159,8 @@ class Item6RoleOnly(Base):
 
 
     def test_0221_a_hostname_change_on_the_same_machine_still_routes(self):      # envoy m-ea0c30970c55 failing input
-        self.reg("curator", "local_same_mac", hostname="MacBookPro")
-        with mock.patch.object(H, "HOSTNAME", "Petrichor"):
+        self.reg("curator", "local_same_mac", hostname="host-a")
+        with mock.patch.object(H, "HOSTNAME", "host-b"):
             n = self.send(self.plain, "role:curator")["nudge"]
         self.assertTrue(n["do"].startswith("Do: SendMessage to local_same_mac:"))
 
@@ -140,12 +169,12 @@ class Item6RoleOnly(Base):
         self.assertEqual(self.send(self.plain, "role:curator")["nudge"], "none (holder on another machine: mail only)")
 
     def test_0221_a_record_without_an_id_routes_only_by_this_machines_own_host_names(self):   # A-4d611 item 4
-        self.reg("envoy", "local_learn", hostname="MacBookPro")                       # a 0.22.1 registration: MacBookPro is an alias now
+        self.reg("envoy", "local_learn", hostname="host-a")                       # a 0.22.1 registration: host-a is an alias now
         st = self.h.state()
-        self.assertIn("macbookpro", {x.lower() for x in st.machine_hosts.get("machine-mac", ())})
-        with mock.patch.object(H, "HOSTNAME", "Petrichor"):
-            self.assertTrue(D._same_machine({"host": "MacBookPro"}, st))                  # old record, alias host: this machine
-            self.assertTrue(D._same_machine({"host": "Petrichor"}, st))                   # the current name is always an alias
+        self.assertIn("host-a", {x.lower() for x in st.machine_hosts.get("machine-mac", ())})
+        with mock.patch.object(H, "HOSTNAME", "host-b"):
+            self.assertTrue(D._same_machine({"host": "host-a"}, st))                  # old record, alias host: this machine
+            self.assertTrue(D._same_machine({"host": "host-b"}, st))                   # the current name is always an alias
             self.assertFalse(D._same_machine({"host": "SomeOtherBox"}, st))               # any other string: mail only
         self.assertFalse(D._same_machine({"machine": "machine-pc", "host": H.HOSTNAME}, st))
         with mock.patch.object(H, "machine_id", lambda: None):                           # unreadable id: fail safe, mail only
@@ -238,7 +267,7 @@ class Item7Alarm(Base):
 
     def test_7e_cap_skips_raise_nothing_stale_and_unreported_do(self):
         c = self.active("curator", "local_a7e")
-        n1 = self.send(self.plain, "role:curator")["nudge"]["msg_id"]
+        n1 = self.send(self.plain, "role:curator", kind="handoff")["nudge"]["msg_id"]    # 0.24.0 (item 5, R1): a task may not skip for a cap
         self.call("harness_admin", op="nudge_result", agent=self.plain, args={"msg_id": n1, "outcome": "skipped", "reason": "sender cap 10/h"})
         self.call("harness_inbox", agent=c)                                    # read, so A1 does not fire either
         self.assertEqual(D.alarm_scan(self.h, force=True), [])
@@ -250,7 +279,7 @@ class Item7Alarm(Base):
         # a trigger-only offer (no id line) skipped with no_remotetrigger raises nothing (critic m-99bea4382739)
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": ""}):
             sec = self.reg("secretary", None)
-        self.h.wake_pin_apply("operator", {"secretary": WP("secretary")})     # 0.23.0 (gap 3, gap 6): dict form, holder registered first
+        legacy_pin(self.h, {"secretary": WP("secretary")})     # 0.23.0 (gap 3, gap 6): dict form, holder registered first
         s3 = self.reg(host="local_s3")
         n3 = self.send(s3, "role:secretary")["nudge"]["msg_id"]
         self.call("harness_admin", op="nudge_result", agent=s3, args={"msg_id": n3, "outcome": "skipped", "reason": "no_remotetrigger"})

@@ -136,8 +136,8 @@ class RefsHosts(Base):             # steps 3, 4
         self.assertEqual([x["seq"] for x in HR.string_refs(evs)], [1, 3])
 
     def test_host_normalised(self):
-        self.assertEqual(H.norm_host("MacBookPro.haven.lan"), "MacBookPro")
-        self.assertEqual(H.norm_host("MacBookPro"), "MacBookPro")
+        self.assertEqual(H.norm_host("host-a.home.lan"), "host-a")
+        self.assertEqual(H.norm_host("host-a"), "host-a")
         self.assertEqual(H.norm_host("10.0.0.5"), "10.0.0.5")
         self.assertEqual(H.norm_host(""), "")
         self.assertNotIn(".", H.HOSTNAME)

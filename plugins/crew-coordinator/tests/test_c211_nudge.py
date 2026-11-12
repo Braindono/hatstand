@@ -111,7 +111,7 @@ class IdRoute(Base):
     def test_three_senders_give_one_id_wake_to_a_cold_recipient(self):
         r = self.reg("curator", "local_cold")
         senders = [self.reg(host="local_s%d" % i) for i in range(3)]
-        outs = [self.nudge(s, r[:8], "task") for s in senders]
+        outs = [self.nudge(s, r[:8], "handoff") for s in senders]   # 0.24.0 (item 5): R2 replaces this slot for task/question/review; it stays for handoff
         self.assertTrue(outs[0]["do"].startswith("Do: SendMessage to local_cold"))
         self.assertEqual(outs[1:], ["none (id route closed by a stale mark or the cold-wake cap: mail only)"] * 2)
         self.assertEqual(len(self.events("nudge.idwake")), 1)
@@ -153,7 +153,7 @@ class IdRoute(Base):
         r = self.reg("curator", "local_warm")
         self.call("harness_inbox", agent=r)                                                # a call just now: warm
         senders = [self.reg(host="local_w%d" % i) for i in range(3)]
-        outs = [self.nudge(s, r[:8], "task")["do"] for s in senders]
+        outs = [self.nudge(s, r[:8], "handoff")["do"] for s in senders]   # 0.24.0 (item 5): R2 replaces this slot for task/question/review; it stays for handoff
         self.assertTrue(all(o.startswith("Do: SendMessage to local_warm") for o in outs))
         self.assertEqual(self.events("nudge.idwake"), [])
 

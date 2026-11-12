@@ -3,7 +3,7 @@
 so a handoff cannot silently drop what the operator asked for.
 
 Data flow (one direction, every hop redacted):
-  indexer output (~/Claude/Transcripts.noindex/<date>-<project>-<session8>.md, already redacted)
+  indexer output (<workspace>/Transcripts.noindex/<date>-<project>-<session8>.md, already redacted)
     -> this writer: redact again on input, extract operator asks by rule (no model), Haiku chooses one tag per ask from a
        closed set (done|open|dropped|backlog), a deterministic verifier checks quotes and cited ids, redact on output
     -> vault file (derived; rebuildable by re-running the writer).
@@ -631,7 +631,7 @@ def _done_backfill(home):
 def capsule_paths(home, ops=None):
     """Handoff capsules: Exchange/projects/*/handoffs/*.md and <ops>/projects/*/handoffs/*.md (deduplicated)."""
     import glob
-    ops = ops or os.environ.get("HARNESS_OPS_ROOT") or os.path.expanduser("~/Claude/Code/harness-ops")
+    ops = ops or os.environ.get("HARNESS_OPS_ROOT") or os.path.expanduser(os.path.join("~", "Claude", "Code", "harness-ops"))
     seen, out = set(), []
     for root in (home, ops):
         for p in sorted(glob.glob(os.path.join(root, "projects", "*", "handoffs", "*.md"))):

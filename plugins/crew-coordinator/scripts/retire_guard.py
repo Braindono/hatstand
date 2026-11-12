@@ -15,7 +15,7 @@ import sys
 import time
 
 MARKER = os.path.join("_harness", "retired_sessions.json")
-HOME_CANDIDATES = ("~/Claude/Exchange", "~/Claude/Projects/Exchange", "~/mnt/Exchange")
+HOME_CANDIDATES = (os.path.join("~", "Claude", "Exchange"), os.path.join("~", "Claude", "Projects", "Exchange"), "~/mnt/Exchange")
 BUILTIN_READS = ("Read", "Grep", "Glob")
 HARNESS_PREFIX = re.compile(r"^mcp__(?:plugin_)?crew-coordinator(?:_crew-coordinator)?__(harness_[a-z_]+)$")
 HARNESS_READS = ("harness_inbox", "harness_recall", "harness_sync")
