@@ -116,7 +116,6 @@ class T(C.Base):
         s = self.reg(host="local_s" + tag)
         mid = self.send(s, "role:curator")["nudge"]["msg_id"]
         self.h.store.append("nudge.unreported", "system", {"msg": mid, "msg_id": mid, "by": s})
-        self.call("harness_inbox", agent=c)
         return mid, self.reg(host="local_relay" + tag)
 
     def test_t5_a_refused_relay_leaves_the_unreported_alarm(self):

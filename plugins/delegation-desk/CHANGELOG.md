@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.4.2 (2026-11-13)
+- delegate skill: helpers never call harness_inbox or harness_sync (inbox only with peek=true); with agent= optional a helper shares the lead's host session id and would mark the lead's mail read (critic note, crew-coordinator 0.25.0 window).
+
 ## 0.4.1 (2026-10-14)
 - Republished as a verified package with a marketplace directory; no content change.
 

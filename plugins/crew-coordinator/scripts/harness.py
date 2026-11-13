@@ -70,6 +70,7 @@ TASK_STATES = ["submitted", "working", "input-required", "completed",
 MSG_KINDS = ["message", "task", "handoff", "result", "question", "notice", "review"]
 ROSTER_EVENTS = ("agent.registered", "agent.retired", "agent.superseded", "role.defined", "role.assigned")
 OPERATOR = ("human", "operator")
+SYSTEM_SENDER = "system"    # 0.25.0 item 39: the named sender of script and alarm notices; no roster agent, never the operator
 
 # --------------------------------------------------------------------------
 # Paths
@@ -1482,6 +1483,7 @@ class State:
         self.wake_reg = {}         # 0.24.0 (item 13): role -> {trigger, holder, session, state pending|verified|rejected|stale, seq, t, vseq, why}
         self.wake_old = {}         # 0.24.0 (item 13): trigger -> role of a verified routine a new registration replaced, until wake.disabled
         self.wake_disabled = set() # 0.24.0 (item 13): triggers reported disabled (wake.disabled)
+        self.wake_seq = {}         # 0.25.0 (item 22): trigger -> seq of its latest wake.registered or wake.verified (fires before it never count)
         self.role_handoffs = {}    # 0.24.0 (item 11): role -> {agent, t, capsule} of the role's latest agent.handed_off
         self.trig_fires = {}       # 0.24.0 item 3: trigger -> [(trigwake seq, role, status, gone)] for woke, held and skipped reports with a parsed status, in report order
         self.cases = {}            # 0.23.0 (item 2): case id -> folded case (see _case_fold)
@@ -1887,6 +1889,8 @@ class State:
         replaces waits in wake_old for its disable report. Verify, reject and stale apply only to the entry with the same trigger."""
         role = cr(d.get("role") or "")
         e = self.wake_reg.get(role)
+        if typ in ("wake.registered", "wake.verified") and d.get("trigger"):
+            self.wake_seq[d["trigger"]] = ev.get("seq")
         if typ == "wake.registered":
             if e and e.get("state") == "verified" and e["trigger"] == d.get("trigger") and e.get("session") == d.get("session"):
                 e.update(holder=actor, seq=ev.get("seq"))      # 0.24.1: the wake belongs to the role; the same routine re-registered stays verified
@@ -2731,9 +2735,30 @@ def render_card(a, health, stats):
     return _box(lines, "◆ " + name_, "#" + a["id"][:8])
 
 
+def live_role_agents_for_host(st, host_sid):
+    """0.25.0 (items 25, 31): the ONE function: ids of agents under this host session id that hold a role and are live (not superseded or
+    retired; a compaction predecessor does not count). harness_sync/harness_inbox use it to default agent=, the SessionStart hook to reuse
+    the chat's agent instead of making a second one. No host session id -> []."""
+    if not host_sid:
+        return []
+    return [a["id"] for a in st.agents.values() if a.get("host_session_id") == host_sid
+            and a.get("status") not in ("superseded", "retired") and st.role_of(a["id"])]
+
+
+_HOME_UNSET = object()
+
+
 class Harness:
-    def __init__(self, home=None, store=None):
-        self.home = home or resolve_home()
+    def __init__(self, home=_HOME_UNSET, store=None):
+        # 0.25.0 (item 33): only an OMITTED home falls back to resolve_home(); an explicit "" or None, or an existing path that is not a folder, raises
+        # (an empty value once opened the real ledger from a test). A path that does not exist yet stays valid: FileStore creates it.
+        if home is _HOME_UNSET:
+            home = resolve_home()
+        elif not isinstance(home, (str, os.PathLike)) or not str(home):
+            raise HarnessError("Harness home must be a path; omit the argument for the default home (an empty value or None is refused)")
+        elif os.path.exists(home) and not os.path.isdir(home):
+            raise HarnessError("Harness home %r exists and is not a folder" % str(home)[:120])
+        self.home = os.fspath(home)
         self.store = store or FileStore(self.home)
         load_ignore(self.home)
 
@@ -2905,6 +2930,16 @@ class Harness:
         self.store.append("agent.registered", aid, data)
         if role and not pred:
             self.store.append("role.assigned", aid, {"role": role, "agent": aid, "via": "role-claim"})
+        if role or pred:                                  # 0.25.0 (item 31): the role chat's own idle hook id is retired from the roster
+            try:
+                hs_ = data.get("host_session_id")
+                for x in list(st.agents.values()):
+                    if hs_ and x["id"] != aid and x.get("host_session_id") == hs_ and x.get("status") in ("active", "idle") \
+                            and not st.role_of(x["id"]) and x.get("spawn_reason") in ("startup", "resume", "clear") \
+                            and x["id"] != (pred or {}).get("id") and not x.get("successor"):
+                        self.store.append("agent.superseded", aid, {"id": x["id"], "successor": aid})
+            except Exception:
+                pass
         pm = (pred or {}).get("model")
         if pred and pm and pm != "unknown" and model != "unknown" and pm != model:
             # model provenance (t-88d62a1ac0): warn, never block; lineage note in the corpus
@@ -2967,7 +3002,9 @@ class Harness:
         a = dict(st.agents[aid])
         a["banner"] = banner(a, st)
         a["leases"] = [L for p, L in st.leases.items() if L["holder"] == aid and st.active_lease(p)]
-        a["unread"] = len(self._inbox_ids(st, aid, unread_only=True))
+        # 0.25.0 (item 24): a role-less id counts only mail addressed to it (by id or group), never the "*" broadcasts; printed "N direct mail"
+        a["roleless"] = st.role_of(aid) is None
+        a["unread"] = self.unread_count(st, aid)
         return a
 
     def set_expertise(self, agent, expertise=None, task=None, confirmed=True):
@@ -2987,7 +3024,7 @@ class Harness:
         if not agent and session_id:
             agent = st.sessions.get(session_id)
         c = self.card(st, self.resolve(st, agent))
-        extra = (f"\nleases: {_clean_text(', '.join(l['path'] for l in c['leases']), 600)}" if c["leases"] else "") + f"\nunread: {c['unread']}"
+        extra = (f"\nleases: {_clean_text(', '.join(l['path'] for l in c['leases']), 600)}" if c["leases"] else "") + f"\nunread: {unread_text(c)}"
         return {"text": c["banner"] + extra, "short": c["short"], "id": c["id"]}
 
     def ledger(self, include_inactive=True):
@@ -3416,7 +3453,7 @@ class Harness:
     def send(self, frm, to, body, subject=None, kind="message", thread=None, reply_to=None,
              refs=None, priority="normal", max_hops=None, expects_reply=False, ids_check=False):
         unknown, note = [], None
-        if ids_check and frm not in ("human", "operator"):
+        if ids_check and frm not in ("human", "operator", SYSTEM_SENDER):
             unknown, note = self._ids_gate(frm, "send", [subject, body] + [str(x) for x in (refs or []) if x], False, (reply_to,))
         r = self._send(frm, to, body, subject, kind, thread, reply_to, refs, priority, max_hops, expects_reply)
         if unknown:
@@ -3426,7 +3463,7 @@ class Harness:
     def _send(self, frm, to, body, subject=None, kind="message", thread=None, reply_to=None,
               refs=None, priority="normal", max_hops=None, expects_reply=False):
         st = self.state()
-        sender = "human" if frm in ("human", "operator") else self.writer(st, frm)
+        sender = "human" if frm in ("human", "operator") else SYSTEM_SENDER if frm == SYSTEM_SENDER else self.writer(st, frm)
         if kind not in MSG_KINDS:
             raise HarnessError(f"kind must be one of {MSG_KINDS}")
         if not isinstance(body, str):
@@ -3758,7 +3795,17 @@ class Harness:
         except Exception:
             pass
 
-    def _inbox_ids(self, st, aid, unread_only=True):
+    def unread_ids(self, st, aid):
+        """0.25.0 (items 24, 30): the ONE unread list (lineage read-state): the banner, whoami, the digest, the fleet table and the dashboard use it;
+        harness_inbox lists the same ids plus, for a role-less id, the "*" broadcasts."""
+        return self._inbox_ids(st, aid, unread_only=True, broadcast=st.role_of(aid) is not None)
+
+    def unread_count(self, st, aid):
+        """0.25.0 (item 24): the unread figure every card, the fleet table and the dashboard print; a role-less id leaves out "*" broadcasts."""
+        return len(self.unread_ids(st, aid))
+
+    def _inbox_ids(self, st, aid, unread_only=True, broadcast=True):
+        """0.25.0 (item 24): broadcast=False leaves out the "*" mail (a role-less id's banner count); harness_inbox keeps them."""
         if aid == "human":
             return [mid for mid in st.order if "human" in st.messages[mid]["to"]
                     and not (unread_only and "human" in st.messages[mid]["read_by"])]
@@ -3770,7 +3817,7 @@ class Harness:
             m = st.messages[mid]
             if m["from"] in mine:
                 continue
-            hit = bool(mine & set(m.get("to_resolved", []))) or "*" in m["to"] \
+            hit = (bool(mine & set(m.get("to_resolved", []))) and (broadcast or "*" not in m["to"])) or (broadcast and "*" in m["to"]) \
                 or any(l.startswith("group:") and l[6:] in groups for l in m["to"]) \
                 or (role is not None and f"role:{role}" in m["to"])
             if not hit:
@@ -3833,7 +3880,7 @@ class Harness:
         tail = ("\nowed reply " + str(len(owed)) + ": " + " ".join(owed[-3:][::-1])   # 0.17.0 (R-055): newest 3, not 8
                 + (f" +{len(owed) - 3} older (harness_admin op=thread)" if len(owed) > 3 else "")) if owed else ""
         return dict({"text": truncate_output(f"{len(msgs)} message(s)" + ("\n" + "\n".join(lines) if lines else "")) + tail, "count": len(msgs),
-                     "ids": [m["id"] for m in msgs]}, **({"owed": owed} if owed else {}))
+                     "ids": [m["id"] for m in msgs]}, **({"owed": owed[-8:], "owed_total": len(owed)} if owed else {}))
 
     def thread(self, thread_id):
         st = self.state()
@@ -4330,21 +4377,28 @@ class Harness:
                 return False, "holder last seen too long ago", {}
             with open(full, encoding="utf-8", errors="replace") as f:
                 txt = f.read()
-            fm_ = re.match(r"^---\n(.*?)\n---", txt, re.S)
-            fm = fm_.group(1) if fm_ else ""
-            sm = re.search(r"^status:[ \t]*(.*)$", fm, re.M)
-            if not (sm and _status_is_open(sm.group(1))):
-                return False, "capsule status is not open (already accepted or closed)", {}
-            pm = re.search(r"^project:[ \t]*(\S+)", fm, re.M)
-            if not pm or norm_project(pm.group(1)) != slug:
-                return False, "capsule project does not match", {}
-            fr = re.search(r"^from:[ \t]*(.*)$", fm, re.M)
-            if not fr or f"#{hid[:8]}" not in fr.group(1) or f"({role})" not in fr.group(1):
-                return False, "capsule is not from the current holder in this role", {}
+            # 0.25.0 (item 29, security): the gates come from the ledger, not from the capsule's own frontmatter (a hand-written capsule has only a
+            # `model:` line). The project comes from the path slug (checked above); the holder's agent.handed_off must name THIS capsule; the
+            # capsule's LATEST version must be the holder's own "handoff capsule" commit (an accept or any later version by another agent is not
+            # open); a missing status line is open only then; the sha equals the last commit (a status line removed by hand, or a swapped file,
+            # is refused).
+            ho = st.role_handoffs.get(role) or {}
+            try:    # exact: the recorded capsule and the requested one resolve to the same path in the home (no suffix or slug-substring match)
+                rec_rel = self._resolve_in_home(str(ho.get("capsule") or "").strip(), must_exist=True).replace("\\", "/") if ho.get("capsule") else None
+            except HarnessError:
+                rec_rel = None
+            if ho.get("agent") != hid or not rec_rel or rec_rel != rel:
+                return False, "the holder's handoff event does not name this capsule", {}
             key = canonical_path(full, self.home)
             v = st.versions.get(key)
-            if not v or v.get("by") != hid or not str(v.get("note") or "").startswith(("handoff capsule", "status:")):
-                return False, "capsule was not committed by the holder through harness_handoff", {}
+            if not v or v.get("by") != hid:
+                return False, "the capsule's latest version was not committed by the holder through harness_handoff", {}
+            if not str(v.get("note") or "").startswith("handoff capsule"):
+                return False, "capsule is not open: a later version (an accept or an edit) follows the holder's handoff commit", {}
+            fm_ = re.match(r"^---\n(.*?)\n---", txt, re.S)
+            sm = re.search(r"^status:[ \t]*(.*)$", fm_.group(1) if fm_ else "", re.M)
+            if sm and not _status_is_open(sm.group(1)):
+                return False, "capsule status says %s: already accepted or closed" % _clean_text(sm.group(1), 40), {}
             hist = st.history.get(key) or []
             if not any(x.get("by") == hid and str(x.get("note") or "").startswith("handoff capsule") for x in hist):
                 return False, "no handoff commit by the holder in the ledger", {}
@@ -4382,8 +4436,18 @@ class Harness:
             task = f"{role}: restore" + (f" from {os.path.splitext(os.path.basename(cap_rel))[0]}" if cap_rel else "")
         self._skip_g3 = True   # restore closes via _close_capsules below (accept target must stay open until then)
         try:
-            c = self.register(None, task, None, project or R.get("project"), None, hid, "restore",
-                              model=model, require_model=True, role=role)
+            if auto:    # 0.25.0 (item 29): an auto-confirmed restore re-checks the holder under a per-role lock, so of two concurrent calls only one wins
+                with self._sidecar_lock(os.path.join(self.store.dir, "restore-" + re.sub(r"[^a-z0-9-]", "_", role))):
+                    st_now = self.state()
+                    cur_ = st_now.current((st_now.roles.get(role) or {}).get("holder") or "")
+                    if cur_ != auto.get("holder") or (st_now.agents.get(cur_) or {}).get("status") not in ("active", "idle"):
+                        return {"text": "restore refused: the role changed hands while this call was checked (another restore took it); "
+                                        "call harness_restore again."}
+                    c = self.register(None, task, None, project or R.get("project"), None, hid, "restore",
+                                      model=model, require_model=True, role=role)
+            else:
+                c = self.register(None, task, None, project or R.get("project"), None, hid, "restore",
+                                  model=model, require_model=True, role=role)
         finally:
             self._skip_g3 = False
         st = self.state()
@@ -4812,25 +4876,16 @@ class Harness:
                      else ["omitted for the proctor: no-carry, blind audits"] if cr(role) == "proctor"
                      else ["n/a (cloud chat or no Stop hook yet): see the state note's Chat lines"], 280, None))
         # 4 Owes reply
+        import doorbell as _db30
         owes = []
-        for mid in reversed(st.order):
+        for mid in reversed(_db30.owed_replies(st, aid)):       # 0.25.0 (item 30): the one owed function, the same list the inbox footer counts
             m = st.messages[mid]
-            if m["from"] in mine:
-                continue
-            if not (mine & set(m.get("to_resolved", [])) or f"role:{role}" in m["to"]):
-                continue
-            if not (m["kind"] in ("task", "question", "review") or m.get("expects_reply")):
-                continue
-            if (st.tasks.get(mid) or {}).get("state") in ("completed", "failed", "canceled", "rejected"):
-                continue
-            if any(st.messages[x]["from"] in mine and st.messages[x]["seq"] > m["seq"] for x in st.threads[m["thread"]]["messages"]):
-                continue
             owes.append(f"{mid} {_clean_text(nm(m['from']), 60)} {m['kind']} · {_clean_text(m.get('subject'), 200) or '-'} · t:{m['thread']}")
         if len(owes) > 5:   # 0.16.0: a count and the 5 newest; the rest by thread
             owes = [f"{len(owes)} owed; newest 5 shown"] + owes[:5]
         secs.append(("Owes reply", owes, 260, "harness_admin op=thread"))
         # 5 Unread mail (subjects + ids; the shown ones are marked read below)
-        uids = self._inbox_ids(st, aid, unread_only=True)
+        uids = self.unread_ids(st, aid)         # 0.25.0 (item 30): the same list the banner and the inbox count
         secs.append(("Unread mail", [f"{i} {_clean_text(nm(st.messages[i]['from']), 60)} {st.messages[i]['kind']} · "
                                      f"{_clean_text(st.messages[i].get('subject'), 120) or '-'}" for i in uids], 200, "harness_inbox"))
         # 6 Decisions in force (0.17.0, R-065): ALL pinned decisions of the project first, ranked, as compact lines (capped
@@ -8656,7 +8711,7 @@ class Harness:
                 pc = peer_code(a, n)
                 if pc and r.get("code") and not (pc[1] and r["code"].startswith(pc[1])):
                     behind.append(f"{n} {pc[0]}→{r['version']}")
-            unread = len(self._inbox_ids(st, a["id"], True))
+            unread = self.unread_count(st, a["id"])
             band = ctx_band(a.get("ctx"), a.get("ctx_base"), self.home, a.get("model"), st.role_of(a["id"]))
             stale = a.get("last_seen", 0) < st.now - float(window) * 3600
             need = 4 * (restart or bool(behind)) + 3 * (band == "now") + 2 * (unread > 0) + (band == "plan")
@@ -8773,7 +8828,7 @@ class Harness:
         for a in st.agents.values():
             b = dict(a)
             b["last_seen_iso"] = now_iso(a["last_seen"])
-            b["unread"] = 0 if a["status"] == "superseded" else len(self._inbox_ids(st, a["id"], True))
+            b["unread"] = 0 if a["status"] == "superseded" else self.unread_count(st, a["id"])
             agents.append(b)
         msgs = []
         for mid in st.order:
@@ -8937,16 +8992,20 @@ def _block_text(content):
     return ""
 
 
-def last_exchange(path, cap=1900):
-    """D (0.12.2): (last user text, last assistant text) from a transcript JSONL, each cut to `cap` chars."""
-    user = asst = ""
+def read_tail(path, cap=400000):
+    """0.25.0 (item 35): the last `cap` bytes of a transcript as lines, read ONCE per Stop call and handed to last_exchange and onecmd."""
     try:
         with open(path, "rb") as f:
             f.seek(0, 2)
-            f.seek(max(0, f.tell() - 400000))
-            lines = f.read().decode("utf-8", "ignore").splitlines()
+            f.seek(max(0, f.tell() - cap))
+            return f.read().decode("utf-8", "ignore").splitlines()
     except Exception:
-        return "", ""
+        return []
+
+
+def last_exchange(lines, cap=1900):
+    """D (0.12.2): (last user text, last assistant text) from transcript lines (read_tail), each cut to `cap` chars. 0.25.0: takes the lines already read."""
+    user = asst = ""
     for ln in reversed(lines):
         if user and asst:
             break
@@ -9008,6 +9067,11 @@ def hook_agent(h, st, inp):
     return cur
 
 
+def unread_text(c):
+    """0.25.0 (item 24): the unread figure a card prints: "N direct mail" for a role-less id (broadcasts left out), else N."""
+    return f"{c['unread']} direct mail" if c.get("roleless") and c.get("unread") else str(c.get("unread", 0))
+
+
 PROTOCOL_CONTEXT = """Harness agent {sob} #{short}: pass agent="{short}" to harness_* tools.
 {expertise_line}
 Rules: protocol skill. Decisions go to the corpus (harness_record) and are cited by id, not restated.
@@ -9031,6 +9095,13 @@ def hook(event: str):
                 h.store.append("agent.resumed", aid, {"id": aid, "session_id": sid})
                 card = h.card(h.state(), aid)
                 reason = "resumed"
+            elif source in ("startup", "resume") and not bound and len(live_role_agents_for_host(st, os.environ.get("CLAUDE_CODE_HOST_SESSION_ID"))) == 1:
+                aid = live_role_agents_for_host(st, os.environ.get("CLAUDE_CODE_HOST_SESSION_ID"))[0]     # 0.25.0 (item 31): this chat already has its agent
+                if sid:
+                    h.store.append("session.bound", aid, {"session_id": sid, "agent": aid})
+                h.store.append("agent.resumed", aid, {"id": aid, "session_id": sid})
+                card = h.card(h.state(), aid)
+                reason = "reused"
             else:
                 pred = bound if (source == "compact" and bound) else None
                 if bound and source == "clear":
@@ -9076,7 +9147,8 @@ def hook(event: str):
                 except Exception:
                     pass
             if card.get("unread"):
-                ctx += f"\nYou have {card['unread']} unread message(s)."
+                ctx += ("\nYou have %d direct mail (harness_inbox)." % card["unread"]) if card.get("roleless") \
+                    else f"\nYou have {card['unread']} unread message(s)."
             _emit({"systemMessage": f"{card['banner']}\n({reason})",
                    "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx}})
         elif event == "pre-compact":
@@ -9154,6 +9226,37 @@ def hook(event: str):
                     h.commit(st.current(aid), key, note=f"auto: {inp.get('tool_name')}", source="auto")
                 except HarnessError:
                     pass
+        elif event == "idcheck":
+            # 0.25.0 (item 18): PostToolUse after harness_send / harness_record, observe only: a cited corpus id that is unknown, or whose title does
+            # not match its citing sentence, gets one short line; silent on a match; every checked id logs hook.idcheck; never blocks.
+            import idcheck
+            if not idcheck.TOOL_RE.search(str(inp.get("tool_name") or "")):
+                return
+            st = h.state()
+            aid = hook_agent(h, st, inp)
+            until = str(load_config(h.home).get("idcheck_observe_until") or "") or idcheck.OBSERVE_UNTIL
+            if idcheck.expired(until):
+                if aid:
+                    try:
+                        idcheck.ended_once(h, "idcheck", aid, until)       # item 38: one hook.observe_ended per day, then silence
+                    except Exception:
+                        pass
+                return
+            role = st.role_of(aid) if aid else None
+            if not role:
+                return                                         # a role-less chat has no decisions to cite
+            ti = inp.get("tool_input") or {}
+            texts = [ti.get("subject"), ti.get("title"), ti.get("body")]
+            cites = idcheck.cited(texts)
+            if not cites:
+                return
+            rows = h.corpus.rows_by_ids([c_[0] for c_ in cites])
+            res = idcheck.verdicts(texts, {r["id"]: r.get("title") for r in rows})
+            ln = idcheck.line_for(res)
+            for i, v in res:
+                h.store.append("hook.idcheck", aid, {"agent": aid, "role": role, "id": i, "verdict": v, "tokens": idcheck.tokens(ln) if v != "match" else 0})
+            if ln:
+                _emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": ln}})
         elif event == "stop":
             # D (0.12.2): last exchange for /restore; local only (cloud hooks have no ledger, F1). 0 model tokens.
             st = h.state()
@@ -9175,7 +9278,24 @@ def hook(event: str):
             role = st.role_of(aid)
             if not role:
                 return
-            u, a_ = last_exchange(tp)
+            tail_ = read_tail(tp)                              # the one transcript read of this Stop call (item 35)
+            try:   # 0.25.0 (item 27a): one command per message, observe only: one short line, never blocks, silent otherwise
+                import onecmd
+                full = last_exchange(tail_, cap=200000)[1]
+                hit = onecmd.check(role, full)
+                sha = onecmd.digest(full)
+                seen = os.path.join(h._hook_state_dir(), "harness-onecmd-%s" % aid[:8])
+                try:
+                    last = open(seen).read().strip()
+                except OSError:
+                    last = ""
+                if hit and last != sha:      # one warning per message
+                    h._atomic_write(seen, sha, mode=0o600)
+                    h.store.append("hook.onecmd", aid, {"agent": aid, "role": role, "blocks": hit[1], "tokens": hit[2], "sha": sha})
+                    _emit({"systemMessage": hit[0]})
+            except Exception:
+                pass
+            u, a_ = last_exchange(tail_)
             if u or a_:
                 h.store.append("restore.slot", aid, {"agent": aid, "role": role, "user": u, "assistant": a_})
 
@@ -9357,7 +9477,7 @@ def main(argv=None):
     s = sub.add_parser("dashboard"); s.add_argument("--out")
     s = sub.add_parser("alarm-scan", help="0.22.0: run the nudge delivery alarm scan once (Harness sync job); 0 model tokens")
     s = sub.add_parser("hook"); s.add_argument("event", choices=["session-start", "pre-compact", "pre-tool-use",
-                                                                 "post-tool-use", "post-bind", "session-end", "stop", "prompt"])
+                                                                 "post-tool-use", "post-bind", "session-end", "stop", "prompt", "idcheck"])
     a = p.parse_args(argv)
     if a.home:
         os.environ["HARNESS_HOME"] = a.home

@@ -74,7 +74,7 @@ OPERATOR_HINT = "operator actions from an agent become approval requests; the op
 
 def _operatorish(v):
     s = str(v).strip().lstrip("#@").lower()
-    return s in ("operator", "human") or s.startswith("operator-")
+    return s in ("operator", "human", "system") or s.startswith("operator-")        # item 39: "system" is the scripts' sender; no chat may claim it
 
 
 def refuse_operator(a):
@@ -178,11 +178,11 @@ TOOLS = [
     ("harness_register", "Register; returns banner. project required (successors inherit). successor_of after compaction. model=your exact model id from your env; pass it even if a cached schema lacks it. role=<role> for no-carry roles (auto-takes it).",
      {"expertise": S, "task": S, "project": S, "successor_of": S, "confirmed": B, "model": S, "role": S}, []),
     ("harness_sync", "/update: first line = status; then Do/Changed. ctx=your token estimate (+base= if the ctx hook gave one); full=old card; do_only=/refresh.",
-     {"agent": A, "mark": B, "ctx": I, "base": I, "full": B, "do_only": B, "state_note": S, "topic": S}, ["agent"]),
+     {"agent": A, "mark": B, "ctx": I, "base": I, "full": B, "do_only": B, "state_note": S, "topic": S}, []),
     ("harness_send", "Message. to: id|name|list|role:x|group:x|*|operator. reply_to continues thread. "
                      "kind: message|task|handoff|result|question|notice|review. state_note=role state ≤1200 chars.",
      {"agent": A, "to": S, "body": S, "subject": S, "kind": S, "reply_to": S, "refs": ARR, "state_note": S, "topic": S}, ["agent", "to", "body"]),
-    ("harness_inbox", "Unread mail. wait=secs long-poll. peek=true lists it without marking it read.", {"agent": A, "wait": I, "peek": B}, ["agent"]),
+    ("harness_inbox", "Unread mail. wait=secs long-poll. peek=true lists it without marking it read.", {"agent": A, "wait": I, "peek": B}, []),
     ("harness_claim", "Lease file(s) before editing; returns version. path may be a list (Haiku agents: max 2 files per call, P-40).", {"agent": A, "path": {"anyOf": [S, ARR]}, "intent": S, "ttl": I},
      ["agent", "path"]),
     ("harness_release", "Release lease (no path = all).", {"agent": A, "path": S}, ["agent"]),
@@ -677,8 +677,25 @@ def retired_reply(h, name, a):
     return {"text": retire_guard.reason(ent)} if ent else None
 
 
+def default_agent(h, name, a):
+    """0.25.0 (item 25): harness_sync and harness_inbox with no agent= take the one LIVE agent holding a role under this server's host
+    session id (CLAUDE_CODE_HOST_SESSION_ID); a superseded or retired agent (a compaction predecessor) does not count. Unset variable, or
+    no or several such agents: one line. Newest-with-a-role is never used (two chats on one server would cross identities)."""
+    if name not in ("harness_sync", "harness_inbox") or not isinstance(a, dict) or a.get("agent"):
+        return False
+    hid = os.environ.get("CLAUDE_CODE_HOST_SESSION_ID")
+    live = H.live_role_agents_for_host(h.state(), hid)        # item 31: the same function the SessionStart hook uses
+    if len(live) != 1:
+        raise H.HarnessError("pass agent=<short id>")
+    a["agent"] = live[0][:8]
+    if name == "harness_inbox":
+        a["peek"] = True        # raw eval F2 / item 37: a helper chat shares the host session id and so the lead's identity; a defaulted inbox reads, it never marks the lead's mail read
+    return True
+
+
 def _call(h, name, a):
     refuse_operator(a)       # 0.15.1: before anything else, for every tool and admin op
+    defaulted = default_agent(h, name, a)   # 0.25.0 (item 25)
     if name in LEGACY_TOOLS and not legacy_enabled(h):
         raise H.HarnessError(f"{name} was retired from the tool surface: use harness_admin op={LEGACY_TOOLS[name]} "
                              "(args per the protocol skill). Temporary escape for one release: HARNESS_LEGACY_TOOLS=1 "
@@ -708,7 +725,7 @@ def _call(h, name, a):
                        model=a.get("model"), require_model=True, role=a.get("role"))
         rebind(h, c["id"])   # 0.15.1: this server process now speaks for the agent it just created
         # Banner only: the full agent record cost ~1k tokens per registration.
-        return with_extras(h, c["short"], {"text": c["banner"] + (f"\nunread: {c['unread']}" if c["unread"] else "")
+        return with_extras(h, c["short"], {"text": c["banner"] + (f"\nunread: {H.unread_text(c)}" if c["unread"] else "")
                 + (f"\nleases: {', '.join(L['path'] for L in c['leases'])}" if c["leases"] else "")
                 + h._close_note(c.get("close_res") or {}) + h.title_do_line(c["id"]) + h.role_do_line(c["id"]),
                 "short": c["short"]})
@@ -736,8 +753,11 @@ def _call(h, name, a):
         SEND_SEEN[key_] = (now_, r_)
         return r_
     if name == "harness_inbox":
-        return h.inbox(a["agent"], a.get("unread_only", True), a.get("mark_read", True) and not a.get("peek"),   # 0.21.0 item 2: peek marks nothing
-                       _bounded_int(a.get("wait", 0), 0, 60, 0), _bounded_int(a.get("limit", 20), 1, 200, 20))
+        r_ = h.inbox(a["agent"], a.get("unread_only", True), a.get("mark_read", True) and not a.get("peek"),   # 0.21.0 item 2: peek marks nothing
+                     _bounded_int(a.get("wait", 0), 0, 60, 0), _bounded_int(a.get("limit", 20), 1, 200, 20))
+        if defaulted and isinstance(r_, dict) and isinstance(r_.get("text"), str):      # item 37: say why nothing was marked read
+            r_["text"] = "defaulted agent: peek only; pass agent=<id> to mark read\n" + r_["text"]
+        return r_
     if name == "harness_thread":
         return h.thread(a["thread"])
     if name == "harness_task_update":

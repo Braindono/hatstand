@@ -190,7 +190,7 @@ class Ids(C.Base):
         self.assertEqual(hashlib.sha256(open(p, "rb").read()).hexdigest()[:12], HOOKS_JSON_023)
 
 
-HOOKS_JSON_023 = "e30459bce78a"   # sha256 first 12 of hooks/hooks.json at crew-coordinator-v0.23.0
+HOOKS_JSON_023 = "93642c97f444"   # sha256 first 12 of hooks/hooks.json: v0.23.0 e30459bce78a; 0.25.0 adds the one-command, id-check and ask_gate hooks (items 18, 27a, 32)
 
 
 if __name__ == "__main__":

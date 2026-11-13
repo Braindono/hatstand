@@ -11,6 +11,13 @@ Design: plans/2026-10-14_h020-doorbell-design-and-test-plan.md; spec 2026-10-15-
 All reads scan the ledger tail (bounded by the window), so a call costs O(recent events)."""
 import json, os, re, time
 
+SYSTEM_SENDER = "system"     # 0.25.0 item 39 (same value as harness.SYSTEM_SENDER): alarm-scan and script notices
+
+
+def is_system_sender(x):
+    """0.25.0 item 39: the one test for the named system sender; a notice from it is never nudged, alarmed or owed."""
+    return x == SYSTEM_SENDER
+
 OFFERS = ("nudge.offered", "nudge.sent")     # 0.21.1 (A-58ff8 item 4): the server event was renamed; the old name still counts as an offer
 OUTCOMES = ("delivered", "held", "skipped", "woke", "refused_by_app")   # 0.22.3: refused_by_app (relayer only); 0.21.2 (item 1): "woke" = the sender fired the role's wake trigger
 RELAY_OUTCOMES = ("delivered", "held", "woke", "refused_by_app")   # 0.22.3 (A-8a3da item 1); 0.24.0 (item 18 point 4): + held
@@ -320,6 +327,37 @@ def reg_state(st, role):
     return e, e["state"]
 
 
+def trigger_dead(st, trig):
+    """0.25.0 (item 22): True when no relay, verify or (see wake_do) disable line should be issued for this routine: it is in wake_disabled,
+    its registration was rejected or went stale (reg_state: a VERIFIED routine whose reported fires after the verify failed, by any
+    reporter), or, for a routine that is not the role's current one (a replaced routine, a legacy pin), fire_stale after the seq of its
+    latest wake.registered or wake.verified (the pin's seq for a legacy pin). A pending routine is never dead by fires. The one dead-check:
+    it reuses reg_state and fire_stale."""
+    if not trig:
+        return False
+    if trig in (getattr(st, "wake_disabled", None) or set()):
+        return True
+    for role, e in (getattr(st, "wake_reg", None) or {}).items():
+        if e.get("trigger") == trig:
+            return reg_state(st, role)[1] in ("rejected", "stale")
+    seq = (getattr(st, "wake_seq", None) or {}).get(trig)
+    if seq is None:
+        pin = getattr(st, "wake_pin", None) or {}
+        ent = pin.get("entries") if isinstance(pin, dict) else None
+        if isinstance(ent, dict) and any((pin_entry(v) or {}).get("trigger") == trig for v in ent.values()):
+            seq = pin.get("seq")
+    try:
+        return fire_stale(st, trig, None, int(seq or 0)) is not None
+    except Exception:
+        return False
+
+
+def last_fire_status(st, trig):
+    """0.25.0 (item 22): the status of the trigger's last reported fire, or None."""
+    f = (getattr(st, "trig_fires", None) or {}).get(trig) or ()
+    return f[-1][2] if f else None
+
+
 def registered_trigger(st, trig):
     """The role whose VERIFIED routine is `trig`, or None (a legacy pin, or a routine not verified yet)."""
     for role, e in (getattr(st, "wake_reg", None) or {}).items():
@@ -344,11 +382,11 @@ def _wake_trigger(st, role, h=None):
     stales the legacy pin too, and a changed routine must not be swapped for an older one silently)."""
     e, state = reg_state(st, role)
     if e and state == "verified":
-        return e["trigger"]
+        return None if trigger_dead(st, e["trigger"]) else e["trigger"]     # 0.25.0 (item 22): never a disabled routine
     if e and state == "stale":
         return None
     e, state = wake_pin_state(st, role, h)
-    return e["trigger"] if e and state == "ok" else None
+    return e["trigger"] if e and state == "ok" and not trigger_dead(st, e["trigger"]) else None
 
 
 def wake_repin_lines(h, st, aid):
@@ -661,7 +699,7 @@ def _attach_holder(h, r):
         return r
     st = h.state()
     m = st.messages.get(r["id"])
-    if not m or m["from"] in ("human", "operator") or m["kind"] not in NUDGE_KINDS:
+    if not m or m["from"] in ("human", "operator") or is_system_sender(m["from"]) or m["kind"] not in NUDGE_KINDS:
         return r
     roles = [t[5:] for t in m.get("to") or [] if isinstance(t, str) and t.startswith("role:")]
     if not roles:
@@ -713,7 +751,7 @@ def _live_recipients(st, m):
             hid = st.role_holder(tgt[5:])
             if hid:
                 cand.append(hid)
-    return [rid for rid in dict.fromkeys(cand) if rid not in ("human", "operator") and rid != m["from"]
+    return [rid for rid in dict.fromkeys(cand) if rid not in ("human", "operator") and not is_system_sender(m["from"]) and rid != m["from"]
             and (st.agents.get(rid) or {}).get("status") in ("active", "idle")]
 
 
@@ -725,7 +763,7 @@ def _attach(h, sender_ref, r):
     m = st.messages.get(mid)
     if not m:
         return r
-    if m["from"] in ("human", "operator"):
+    if m["from"] in ("human", "operator") or is_system_sender(m["from"]):
         return r
     if m["kind"] not in NUDGE_KINDS:
         # 0.23.0 (A-08480 item 4): a notice to a live recipient says it rings nobody; no event. Other non-ringing kinds are unchanged.
@@ -1115,6 +1153,22 @@ def _claim_rewake(h, st, caller, me, e, evs, now):
     return rewake_relay_line(d)
 
 
+def _envoy_for(h, st, what, trig, role):
+    """0.25.0 (item 28): the live envoy that gets this verify or disable line first, or None. It must hold role envoy, be a local_ relay
+    holder on this machine (ringable), and, for a verify, not be the registrant or in its lineage (the registrant never verifies)."""
+    eid = st.role_holder("envoy")
+    a = st.agents.get(eid) or {}
+    if not eid or "envoy" not in set(_opcfg(h)["relay_roles"]) or not (a.get("host_session_id") or "").startswith("local_") \
+            or not _same_machine(a, st):
+        return None
+    if what == "verify":
+        reg = (getattr(st, "wake_reg", None) or {}).get(role) or {}
+        hold = reg.get("holder")
+        if hold and (eid == hold or eid in set(st.lineage(hold)) or hold in set(st.lineage(eid))):
+            return None
+    return eid
+
+
 def wake_do(h, caller, now=None):
     """0.24.0 (item 13): one Do-line for a live Code relay holder (a relay role, a local_ id on this machine): read a pending routine and
     report wake_verify, or disable a routine a different trigger replaced and report wake_disabled. One claim per routine (wake.claim, under the
@@ -1126,9 +1180,11 @@ def wake_do(h, caller, now=None):
         todo = []
         for role, e in sorted(reg.items()):
             if e.get("state") == "pending" and caller != e["holder"] and caller not in set(st.lineage(e["holder"])) \
-                    and e["holder"] not in set(st.lineage(caller)):
+                    and e["holder"] not in set(st.lineage(caller)) and not trigger_dead(st, e["trigger"]):
                 todo.append(("verify", e["trigger"], role))
-        todo += [("disable", t, r) for t, r in sorted(wake_to_disable(st).items())]
+        # 0.25.0 (item 22): no disable line for a routine whose last fire was 404 or 410 (it is gone); 401, 403, 400 persistent_session_gone,
+        # 429 and 5xx keep it (the routine may still exist and fire)
+        todo += [("disable", t, r) for t, r in sorted(wake_to_disable(st).items()) if last_fire_status(st, t) not in (404, 410)]
         if not todo:
             return None
         me = st.agents.get(caller) or {}
@@ -1140,6 +1196,14 @@ def wake_do(h, caller, now=None):
             if any((c.get("data") or {}).get("trigger") == trig and (c.get("data") or {}).get("what") == what
                    and now - float(c.get("t") or 0) < WAKE_CLAIM_S for c in claims):
                 continue
+            env_ = _envoy_for(h, st, what, trig, role)       # 0.25.0 (item 28): the envoy first; any other relay role only when none qualifies
+            if env_ and st.role_of(caller) != "envoy":
+                la_ = _last_call(h, env_)
+                gone_ = any((c.get("data") or {}).get("trigger") == trig and (c.get("data") or {}).get("what") == what
+                            and (c.get("data") or {}).get("by") == env_ for c in claims)   # an envoy claim past WAKE_CLAIM_S (the check above passed) and still listed: unreported
+                if la_ is not None and now - la_ <= ID_COLD_S and not gone_:
+                    continue                                    # a warm envoy that has not sat on this line yet keeps it
+            who_ = "" if st.role_of(caller) == "envoy" else " (for the envoy)"
 
             def _free(store, trig=trig, what=what):
                 for x in store.read_all()[-3000:]:
@@ -1156,8 +1220,8 @@ def wake_do(h, caller, now=None):
                 return (f"Do: RemoteTrigger action=get trigger_id={trig} ({load}). Then report harness_admin op=wake_verify "
                         f'args={{trigger:"{trig}",prompt:"<prompt as returned>",enabled:<true|false>,session:"<bound session id>",'
                         f'kind:"<run_once|recurring>",run_at:"<its run date, ISO>"}} with the fields copied from the get result, never computed '
-                        f"(role:{role}'s wake routine; no RemoteTrigger tool here: skip it).")
-            return (f"Do: RemoteTrigger action=update trigger_id={trig} enabled=false ({load}; role:{role}'s old wake routine, its holder "
+                        f"(role:{role}'s wake routine{who_}; no RemoteTrigger tool here: skip it).")
+            return (f"Do: RemoteTrigger action=update trigger_id={trig} enabled=false ({load}; role:{role}'s old wake routine{who_}, its holder "
                     f"changed). Then report harness_admin op=wake_disabled args={{trigger:\"{trig}\"}}. No RemoteTrigger tool here: skip it.")
     except Exception:
         return None
@@ -1599,8 +1663,10 @@ def _capped(h, aid, evs, now):
 
 
 def relay_expire(h, now=None):
-    """An offer with no result RELAY_TTL_S after it was made becomes nudge.result skipped relay_expired (read_before_relay when the
-    recipient has read the mail), by system for the sender; the existing alarm then applies. Never raises. -> [msg ids]"""
+    """0.25.0 (item 34): an offer with no result RELAY_TTL_S after it was made is closed: nudge.miss (reason relay_expired) plus relay.closed
+    (reason expired) written by system, NEVER a system nudge.result (the sender's later report then still counts as the first result and the
+    R2 rewakes still run). An offer already closed (read, trigger_dead, expired) is skipped; one whose recipient has read the mail gets a plain
+    relay.closed (reason read) and no miss. The alarm then depends on the unread condition, not on an expiry result. Never raises. -> [msg ids]"""
     out = []
     try:
         now = float(now if now is not None else time.time())
@@ -1608,7 +1674,7 @@ def relay_expire(h, now=None):
         offers = [e for e in evs if e["type"] == "nudge.relay_offer"]
         if not offers:
             return out
-        done = _results(h)
+        done = _results(h) | _closed(h)
         st = None
         for e in offers:
             d = e.get("data") or {}
@@ -1617,15 +1683,15 @@ def relay_expire(h, now=None):
                 continue                                   # a rewake offer never writes a result (item 5 fix 1)
             st = st or h.state()
             read = d.get("to") in ((st.messages.get(mid) or {}).get("read_by") or [])
-            data = {"msg": mid, "msg_id": mid, "by": "system", "for": d.get("from"), "outcome": "skipped",
-                    "reason": "read_before_relay" if read else "relay_expired"}
 
-            def _fresh(store, mid=mid):
+            def _once(store, mid=mid):
                 for x in store.read_all()[-3000:]:
-                    if x.get("type") == "nudge.result" and ((x.get("data") or {}).get("msg_id") == mid):
+                    if x.get("type") in ("relay.closed", "nudge.result") and ((x.get("data") or {}).get("msg_id") == mid):
                         raise _Already()
             try:
-                h.store.append("nudge.result", "system", data, precheck=_fresh)
+                h.store.append("relay.closed", "system", {"msg_id": mid, "reason": "read" if read else "expired"}, precheck=_once)
+                if not read:
+                    _miss(h, mid, d.get("to"), d.get("from"), "relay_expired")
                 out.append(mid)
             except _Already:
                 pass
@@ -1701,6 +1767,9 @@ def claim_relay(h, caller, now=None):
                 continue
             if mid in done or now - float(e.get("t") or 0) >= RELAY_TTL_S:
                 continue
+            if d.get("trigger") and trigger_dead(st, d["trigger"]):
+                _close_dead(h, d)                          # 0.25.0 (item 22): a dead routine is closed here, never carried
+                continue
             view = _relay_view(h, mid, evs)
             if view["claim"] and now - (view["claim_t"] or now) >= RELAY_CLAIM_S:
                 old = view["claim"]
@@ -1769,6 +1838,26 @@ def _ever_claimed(h, msg_id, mine):
                and not (e.get("data") or {}).get("key") and (e.get("data") or {}).get("by") in mine for e in _relay_events(h))
 
 
+def _close_dead(h, d):
+    """0.25.0 (item 22): close an offer whose routine is dead: relay.closed {reason trigger_dead} (NOT a nudge.result: _first_results takes the
+    first result per message, so a system skipped result would shadow a later sender report and the R2 rewakes would never fire), and one
+    nudge.miss per message and recipient for the audit trail. A precheck keeps it to one. Never raises."""
+    try:
+        mid = d.get("msg_id")
+
+        def _once(store):
+            for x in store.read_all()[-3000:]:
+                if x.get("type") == "relay.closed" and (x.get("data") or {}).get("msg_id") == mid:
+                    raise _Already()
+        try:
+            h.store.append("relay.closed", "system", {"msg_id": mid, "reason": "trigger_dead"}, precheck=_once)
+        except _Already:
+            return
+        _miss(h, mid, d.get("to"), d.get("from"), "trigger_dead")
+    except Exception:
+        pass
+
+
 def _closed(h):
     """Item 18 point 3: msg ids whose relay a read closed (relay.closed)."""
     return {(e.get("data") or {}).get("msg_id") for e in _tail(h, needle=b'"relay.closed"') if e.get("type") == "relay.closed"}
@@ -1820,6 +1909,8 @@ def live_claim_line(h, caller, now=None):
                 continue
             if view["offer"].get("to") in ((st.messages.get(mid) or {}).get("read_by") or []):
                 continue
+            if view["offer"].get("trigger") and trigger_dead(st, view["offer"]["trigger"]):
+                continue                                   # 0.25.0 (item 22): the routine died after the claim
             return relay_line(view["offer"])
     except Exception:
         return None
@@ -1926,14 +2017,16 @@ def _lineage(st, aid):
     return set(st.lineage(aid))
 
 
-def owed_replies(st, aid):
-    """Ids of task/question/review mail (or mail marked expects_reply) to this agent that it has not answered yet."""
+def owed_replies(st, aid, cap=None):
+    """Ids of task/question/review mail (or mail marked expects_reply) to this agent that it has not answered yet, oldest first. 0.25.0 (item 30):
+    the ONE owed function: uncapped by default (it was cut to the newest 8, so every caller printed "8"); the digest, the inbox footer and
+    the vault all call it. `cap` keeps the newest n for a caller that wants a short list."""
     mine = _lineage(st, aid)
     role = st.role_of(aid)
     out = []
     for mid in st.order:
         m = st.messages[mid]
-        if m["from"] in mine:
+        if m["from"] in mine or is_system_sender(m["from"]):
             continue
         if not (mine & set(m.get("to_resolved", [])) or (role and f"role:{role}" in m["to"])):
             continue
@@ -1944,7 +2037,7 @@ def owed_replies(st, aid):
         if any(st.messages[x]["from"] in mine and st.messages[x]["seq"] > m["seq"] for x in st.threads[m["thread"]]["messages"]):
             continue
         out.append(mid)
-    return out[-8:]
+    return out[-cap:] if cap else out
 
 
 def open_task(st, aid):
@@ -2131,6 +2224,41 @@ def _last_activity(h, st, rid):
     return float(ls) if ls else None
 
 
+def _answered(st, mid, rid, role=None):
+    """0.25.0 (item 26): "reply" or "read" when the addressee has answered mail `mid` on its thread (any kind, a notice too) or read it,
+    else None. The addressee is the recipient, its lineage (a successor's reply counts: the recipient is in the successor's lineage), and
+    the role's current holder with its lineage. A reply on ANOTHER thread does not count (known and kept)."""
+    m = st.messages.get(mid) or {}
+    who = {rid} | set(st.lineage(rid) or [])
+    hol = st.role_holder(role) if role else None
+    if hol:
+        who |= {hol} | set(st.lineage(hol) or [])
+    for a_ in list(st.agents):                    # a successor: an agent whose lineage reaches the recipient
+        if a_ not in who and rid in set(st.lineage(a_) or []):
+            who.add(a_)
+    if who & set(m.get("read_by") or []):
+        return "read"
+    for x in (st.threads.get(m.get("thread")) or {}).get("messages") or []:
+        mx = st.messages.get(x) or {}
+        if x != mid and mx.get("from") in who and (mx.get("seq") or 0) > (m.get("seq") or 0):
+            return "reply"
+    return None
+
+
+def _dead_relay_mids(h, st, now):
+    """0.25.0 (item 22): msg ids whose relay offer was closed trigger_dead, or whose offer names a routine that is dead now: the alarm scan
+    ignores them (the nudge.miss is the audit record, not a signal)."""
+    out = set()
+    for e in _tail(h, needle=b'"relay.closed"'):
+        if e.get("type") == "relay.closed" and (e.get("data") or {}).get("reason") == "trigger_dead":
+            out.add((e.get("data") or {}).get("msg_id"))
+    for e in _relay_events(h):
+        d = e.get("data") or {}
+        if e.get("type") == "nudge.relay_offer" and d.get("trigger") and trigger_dead(st, d["trigger"]):
+            out.add(d.get("msg_id"))
+    return out
+
+
 def alarm_scan(h, now=None, force=False):
     """Scan the ledger tail (last 24 h of offers) and write nudge.alarm per the rules above. At most once a minute unless force=True.
     Never raises. -> [alarm data dicts written]"""
@@ -2146,7 +2274,7 @@ def alarm_scan(h, now=None, force=False):
         cfg = _opcfg(h)
         relay_expire(h, now)                         # 0.22.3: an expired relay offer becomes a skipped result before the alarm reads results
         st = h.state()
-        evs = [e for e in _tail(h, needle=b'"nudge.') if e.get("type") in ("nudge.offered", "nudge.result", "nudge.unreported", "nudge.alarm", "nudge.alarm_armed")
+        evs = [e for e in _tail(h, needle=b'"nudge.') if e.get("type") in ("nudge.offered", "nudge.result", "nudge.unreported", "nudge.alarm", "nudge.alarm_armed", "nudge.alarm_closed")
                or (e.get("type") == "nudge.skipped" and str((e.get("data") or {}).get("reason") or "").startswith(HELD_REASONS))]
         # 0.24.0 (item 5 fix 1, envoy m-7ffa2d0bcd3c): mail that R2 or nb 6 held back is still unread mail; the alarm reads it as an id offer
         evs = [dict(e, type="nudge.offered", data={"msg_id": (e.get("data") or {}).get("msg"), "from": (e.get("data") or {}).get("from"),
@@ -2162,6 +2290,18 @@ def alarm_scan(h, now=None, force=False):
             armed = stamp["armed"]
         armed_t = float((armed.get("data") or {}).get("t") or armed.get("t") or now) if isinstance(armed, dict) else now
         alarmed = {(e.get("data") or {}).get("msg_id") for e in evs if e["type"] == "nudge.alarm"}
+        a_closed = {(e.get("data") or {}).get("msg_id") for e in evs if e["type"] == "nudge.alarm_closed"}
+        for e in evs:                                # 0.25.0 (item 26): an open alarm closes when the addressee answered or read the mail
+            d = e.get("data") or {}
+            if e["type"] == "nudge.alarm" and d.get("msg_id") not in a_closed and float(e.get("t") or 0) >= now - 86400:
+                why = _answered(st, d.get("msg_id"), d.get("to"), d.get("role"))
+                if why:
+                    try:
+                        h.store.append("nudge.alarm_closed", "system", {"msg_id": d.get("msg_id"), "reason": why})
+                        a_closed.add(d.get("msg_id"))
+                    except Exception:
+                        pass
+        dead_mids = _dead_relay_mids(h, st, now)
         results = {(e.get("data") or {}).get("msg_id"): e.get("data") or {} for e in evs if e["type"] == "nudge.result"}
         unrep = {(e.get("data") or {}).get("msg_id") for e in evs if e["type"] == "nudge.unreported"}
         role_hour = {}
@@ -2177,8 +2317,8 @@ def alarm_scan(h, now=None, force=False):
                 continue
             d = e.get("data") or {}
             mid, sent_t = d.get("msg_id") or d.get("msg"), float(e.get("t") or 0)
-            if not mid or mid in alarmed:
-                continue
+            if not mid or mid in alarmed or mid in dead_mids:
+                continue                                 # 0.25.0 (item 22): a dead routine's offer raises no alarm
             m = st.messages.get(mid) or {}
             for i, rid in enumerate(d.get("to") or []):
                 if not (d.get("by_id") or [])[i:i + 1] or not d["by_id"][i]:
@@ -2191,6 +2331,8 @@ def alarm_scan(h, now=None, force=False):
                     continue                                 # not active at send time or at scan time
                 role = (d.get("roles") or [None] * (i + 1))[i] or st.role_of(rid)
                 res = results.get(mid) or {}
+                if _answered(st, mid, rid, role):         # 0.25.0 (item 26): the addressee replied on the thread or read the mail: no alarm
+                    continue
                 cond = reason = None
                 if res.get("outcome") == "skipped" and not _is_cap(res.get("reason")) and res.get("reason") not in RELAY_NO_ALARM:
                     cond, reason = "skipped", res.get("reason") or ""
@@ -2213,7 +2355,7 @@ def alarm_scan(h, now=None, force=False):
                 out.append(data)
                 if now - armed_t >= cfg["alarm_mail_after_days"] * 86400:
                     try:    # ids only, never subject or body text of the message
-                        h.send("operator", ["role:envoy"], f"nudge.alarm {mid} role {role} cond {cond} age {data['age_min']} min",
+                        h.send(SYSTEM_SENDER, ["role:envoy"], f"nudge.alarm {mid} role {role} cond {cond} age {data['age_min']} min",
                                subject="nudge alarm", kind="notice")
                     except Exception:
                         pass
@@ -2229,9 +2371,12 @@ def alarm_lines(h, st, aid):
     """Sync 'Changed' lines: alarms in the last 24 h for this agent whose message it still has not read."""
     out = []
     try:
-        for e in _tail(h, needle=b"nudge.alarm"):
+        evs_ = _tail(h, needle=b"nudge.alarm")
+        shut = {(e.get("data") or {}).get("msg_id") for e in evs_ if e.get("type") == "nudge.alarm_closed"}
+        for e in evs_:
             d = e.get("data") or {}
-            if e.get("type") == "nudge.alarm" and d.get("to") == aid and float(e.get("t") or 0) >= time.time() - 86400:
+            if e.get("type") == "nudge.alarm" and d.get("to") == aid and float(e.get("t") or 0) >= time.time() - 86400 \
+                    and d.get("msg_id") not in shut:
                 m = st.messages.get(d.get("msg_id")) or {}
                 if aid not in (m.get("read_by") or []):
                     out.append(f"⚠ nudge alarm: {d.get('msg_id')} ({d.get('cond')}) is waiting: harness_inbox")

@@ -291,7 +291,6 @@ class Item7Alarm(Base):
         s = self.reg(host="local_su")
         n = self.send(s, "role:curator")["nudge"]["msg_id"]
         self.h.store.append("nudge.unreported", "system", {"msg": n, "msg_id": n, "by": s})
-        self.call("harness_inbox", agent=c)
         out = D.alarm_scan(self.h, force=True)
         self.assertEqual([(x["cond"], x["from"]) for x in out], [("unreported", s)])
 
@@ -313,6 +312,7 @@ class Item7Alarm(Base):
         self.assertEqual(len(mails()), 1)
         body = mails()[0]["body"]
         self.assertTrue(body.startswith("nudge.alarm m-"))
+        self.assertEqual(mails()[0]["from"], "system")                           # item 39: a named system sender, never the operator
         self.assertNotIn("SECRET-", body)                                        # no subject or body text of the message
 
     def test_7g_thresholds_come_from_operator_json_only(self):

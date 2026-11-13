@@ -19,7 +19,7 @@ description: Use when a mechanical step (crawl, parse, lint, diff, export) can g
 2. Prompt = goal + exact input paths + output path/format + a stop condition + "return ≤10 lines: result, output paths, anomalies". No chat history, no persona.
 3. Parallelize only independent steps. Keep it to ≤3 workers unless the operator asked for scale.
 4. Verify before acting: open the output, spot-check one item, then commit or send. A worker's claim is not evidence.
-5. Workers never call harness tools. You claim leases, commit versions and move tickets.
+5. Workers never call harness tools. In particular a helper never calls harness_inbox or harness_sync (harness_inbox only with peek=true is safe): agent= is optional, so a helper in your chat shares your host session id and a bare call would read and mark YOUR mail as read, or report your state. You claim leases, commit versions and move tickets.
 6. Record only the outcome (ids, paths) in your context. Discard the worker transcript.
 7. Step cap: an agent may specify a tool-call cap N; at N−3 calls, stop and deliver what you have (don't wait for the cap or try to optimize further).
 8. Return contract: report ≤400 words; quoted tool output max head 5000 + tail 5000 chars, with a 'narrow your command' hint when cut.

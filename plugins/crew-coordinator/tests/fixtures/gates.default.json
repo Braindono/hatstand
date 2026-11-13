@@ -1,0 +1,66 @@
+{
+ "version": 1,
+ "ask_gate": {
+  "enabled": true,
+  "sources": [
+   {
+    "label": "operator facts (single source)",
+    "path": "Projects/CV_Management/*skills_repository.json"
+   },
+   {
+    "label": "intake (unmerged)",
+    "path": "Projects/CV_Management/*skills_repository.INTAKE.md"
+   },
+   {
+    "label": "answers ledger",
+    "path": "Projects/Exchange/projects/secretary/ANSWERS.md"
+   },
+   {
+    "label": "operator rules (cv)",
+    "path": "Projects/Exchange/projects/cv-management/OPERATOR_RULES.md"
+   },
+   {
+    "label": "operator rules",
+    "path": "Projects/Exchange/OPERATOR.md"
+   },
+   {
+    "label": "secretary rules",
+    "path": "Projects/Secretary/rules/*.md"
+   }
+  ],
+  "fact_words": [
+   "degree",
+   "major",
+   "minor",
+   "title",
+   "date",
+   "start",
+   "end",
+   "school",
+   "university",
+   "employer",
+   "salary",
+   "address",
+   "phone",
+   "email",
+   "years",
+   "demos",
+   "certification",
+   "location",
+   "remote",
+   "relocation",
+   "sponsorship",
+   "veteran",
+   "gender",
+   "race",
+   "disability",
+   "pronouns"
+  ],
+  "stopwords_extra": [
+   "hub"
+  ],
+  "min_term_hits": 2,
+  "bypass_marker": "[searched:",
+  "answers_ledger": "Projects/Exchange/projects/secretary/ANSWERS.md"
+ }
+}

@@ -72,7 +72,9 @@ class Item18(C.Base):
         self.assertEqual(self.ev("nudge.relay_claim"), [])
         self.assertEqual(D.relay_notice_lines(self.h, self.h.state(), self.cloud, now=time.time() + 700), [])
         D.relay_expire(self.h, now=time.time() + D.RELAY_TTL_S + 5)
-        self.assertEqual([r["reason"] for r in self.ev("nudge.result")], ["read_before_relay"])
+        self.assertEqual(self.ev("nudge.result"), [])                              # 0.25.0 (item 34): never a system result
+        self.assertEqual(self.ev("nudge.miss"), [])                                # and a read-closed offer gets no spurious miss
+        self.assertEqual(len(self.ev("relay.closed")), 1)
 
     def test_rl2_a_read_after_the_claim_stops_the_repeat(self):
         a, = self.holders("envoy")
@@ -205,17 +207,19 @@ class Item18(C.Base):
         self.h.store.append("nudge.result", self.cloud, {"msg": mid, "msg_id": mid, "by": self.cloud, "for": self.cloud,
                                                           "outcome": "woke", "reason": "HTTP 200", "status": 200})
         self.rewake_offer(mid)
-        self.assertIn("Rewake 1 of 2", CH.relay_hook(self.hook_inp(a)) or "")
+        self.assertIsNone(CH.relay_hook(self.hook_inp(a)))                        # 0.25.0 (item 23): a hook never claims
+        self.assertEqual(self.ev("nudge.relay_claim"), [])
+        self.assertIn("Rewake 1 of 2", D.attach_relay(self.h, a, {"text": "x"})["text"])   # the holder's own harness result does
         self.call("harness_inbox", agent=self.cur)
-        with mock.patch.object(H, "Harness", side_effect=AssertionError("the hook built a Harness")):
-            self.assertIsNone(CH.relay_hook(self.hook_inp(a, sid="s-two")))
 
     # RL7
     def test_rl7_a_read_call_deep_in_a_long_turn_carries_the_claimed_doline(self):
         a, = self.holders("envoy")
         mid = self.nudge()
         self.ask(mid)
-        line = CH.relay_hook(self.hook_inp(a))                                      # no harness call needed
+        self.assertIsNone(CH.relay_hook(self.hook_inp(a)))                          # 0.25.0 (item 23): never from a hook
+        self.assertEqual(self.ev("nudge.relay_claim"), [])
+        line = D.attach_relay(self.h, a, {"text": "x"})["text"]                     # only in the claiming holder's own harness result
         self.assertTrue(line.startswith("Do: SendMessage to local_cur: Mail %s" % mid), line)
         self.assertEqual([d["by"] for d in self.ev("nudge.relay_claim")], [a])
 
@@ -226,9 +230,8 @@ class Item18(C.Base):
         buf = io.StringIO()
         with mock.patch.object(CH.sys, "stdin", io.StringIO(json.dumps(self.hook_inp(a)))), redirect_stdout(buf):
             CH.main()
-        out = json.loads(buf.getvalue())["hookSpecificOutput"]
-        self.assertEqual(out["hookEventName"], "PostToolUse")
-        self.assertTrue(out["additionalContext"].startswith("Do: SendMessage to local_cur: Mail %s" % mid))
+        self.assertNotIn(mid, buf.getvalue())                                       # 0.25.0 (item 23): after-Bash hook output carries no relay line
+        self.assertEqual(self.ev("nudge.relay_claim"), [])
 
     def test_rl7_guard_no_open_offer_means_no_claim_and_no_line(self):
         a, = self.holders("envoy")
@@ -270,7 +273,8 @@ class Item18(C.Base):
         a, = self.holders("envoy")
         mid = self.call("harness_send", agent=self.plain, to="role:curator", body="b", subject="s", kind="task")["id"]
         self.rewake_offer(mid)
-        self.assertIn("Rewake 1 of 2", CH.relay_hook(self.hook_inp(a)) or "")
+        self.assertIsNone(CH.relay_hook(self.hook_inp(a)))
+        self.assertIn("Rewake 1 of 2", D.attach_relay(self.h, a, {"text": "x"})["text"])
 
     def test_fix1_a_busy_ledger_lock_is_skipped_not_waited_on(self):
         import fcntl
@@ -283,7 +287,7 @@ class Item18(C.Base):
             self.assertIsNone(CH.relay_hook(self.hook_inp(a)))
             self.assertLess(time.time() - t0, 1.0)
             fcntl.flock(lf, fcntl.LOCK_UN)
-        self.assertIn(mid, CH.relay_hook(self.hook_inp(a)))                          # free again: the next tool call claims
+        self.assertIsNone(CH.relay_hook(self.hook_inp(a)))                           # 0.25.0 (item 23): the hook never claims
 
     # RL8
     def test_rl8_the_hook_repeats_at_most_once_per_2_min_and_stops_after_the_report(self):
@@ -318,7 +322,8 @@ class Item18(C.Base):
         self.assertIsNone(CH.relay_hook(self.hook_inp(a, agent_id="agent-helper-1")))
         self.assertIsNone(CH.relay_hook(self.hook_inp(a, transcript_path="/x/projects/p/s-main/subagents/agent-1.jsonl")))
         self.assertEqual(self.ev("nudge.relay_claim"), [])
-        self.assertIn(mid, CH.relay_hook(self.hook_inp(a)))                          # the holder's own next call does
+        self.assertIsNone(CH.relay_hook(self.hook_inp(a)))                           # 0.25.0 (item 23): nor does the holder's own hook
+        self.assertIn(mid, D.attach_relay(self.h, a, {"text": "x"})["text"])         # its next harness result does
 
     # timers (spec section 4 point 7, v3 nb 1)
     def test_timers(self):

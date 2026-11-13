@@ -118,9 +118,10 @@ class R(C.Base):
         later = time.time() + D.RELAY_TTL_S + 5
         with mock.patch.object(D, "_last_activity", lambda h, st, rid: later):
             out = D.alarm_scan(self.h, now=later, force=True)
-        res = [r for r in self.ev("nudge.result") if r["msg_id"] == mid]
-        self.assertEqual([(r["outcome"], r["reason"], r["by"], r["for"]) for r in res], [("skipped", "relay_expired", "system", self.cloud)])
-        self.assertEqual([(x["msg_id"], x["cond"]) for x in out], [(mid, "skipped")])
+        self.assertEqual([r for r in self.ev("nudge.result") if r["msg_id"] == mid], [])       # 0.25.0 (item 34): no system result
+        self.assertEqual([r["reason"] for r in self.ev("relay.closed") if r["msg_id"] == mid], ["expired"])
+        self.assertEqual([r["reason"] for r in self.ev("nudge.miss") if r["msg_id"] == mid], ["relay_expired"])
+        self.assertEqual([(x["msg_id"], x["cond"]) for x in out], [(mid, "unread")])          # the alarm now rests on the unread condition
 
     def test_t2b_read_before_any_relay_expires_without_an_alarm(self):
         mid = self.nudge()
@@ -129,7 +130,7 @@ class R(C.Base):
         later = time.time() + D.RELAY_TTL_S + 5
         with mock.patch.object(D, "_last_activity", lambda h, st, rid: later):
             out = D.alarm_scan(self.h, now=later, force=True)
-        self.assertEqual([r["reason"] for r in self.ev("nudge.result") if r["msg_id"] == mid], ["read_before_relay"])
+        self.assertEqual([r for r in self.ev("nudge.result") if r["msg_id"] == mid], [])       # 0.25.0 (item 34)
         self.assertEqual([x for x in out if x["msg_id"] == mid], [])
 
     # T3
