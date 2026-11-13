@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.24.2: a dead wake routine is flagged stale (bug fix for the secretary's silent wake failure)
+Scope items (verbatim):
+- Failed-fire count (harness.py nudge.result fold): a fire report whose reason starts HTTP plus 3 digits counts toward trig_fires whatever the outcome (held, skipped, woke), not only woke
+- Gone routine: HTTP 400 with persistent_session_gone marks the routine stale at once (cannot fire again); a plain 400 still needs 3 failed fires in a row; a 2xx still resets
+- Holder notice: a routine gone stale for that reason drops the holder from wake-pin live and the holder's next sync prints the register-a-routine line; replay of the real ledger is tested
+
+What went wrong: a role whose chat was replaced kept a routine bound to the gone chat. Every ring returned HTTP 400 persistent_session_gone, but the relay reported those fires as held or skipped, and only a woke report with a status counted as a failed fire. The routine stayed verified, the holder stayed listed as wake-pin live, and nobody was told to register a new routine. The secretary had no working wake since 11-12.
+
+What changed:
+- A fire report on a trigger offer counts as a fire whatever its outcome (held, skipped or woke), when its reason carries an HTTP status. Only woke spends a pin.
+- HTTP 400 with the phrase persistent_session_gone makes the routine stale at once. Any other 400 still takes three failed fires in a row; a 2xx resets the count.
+- A stale routine gives its holder the register-a-routine line on the next sync, and the relay stops listing the holder as wake-pin live (no new code for this: both follow from the stale state).
+- The 0.24.0 rule on skipped reports is relaxed for trigger offers: a skipped report may carry an HTTP status instead of a reason code, but only a status that is not 2xx. A skipped report with a 2xx status is refused; send it as woke. A skipped task with no status and no code is still refused.
+- Held and skipped trigger-offer reports written before 0.24.2 that lack a status are read by their reason text (the same parse as before). This changes derived state of the real ledger in one place: the secretary's routine is stale instead of verified when 0.24.2 is installed, so its holder sees the register line at once. The other routine in the ledger (the dreamer's) stays verified.
+
+No new op, approval action or event type. Tests: 11 new in tests/test_c242_fire_gone.py (fire counting by outcome, 400 gone at once, plain 400 takes three, 2xx resets, 2xx on skipped refused, old status-less events read by reason, replay of the real ledger).
+
 ## 0.24.1: the wake belongs to the role (bug fix for the 0.24.0 wake defect)
 Scope items (verbatim):
 - Wake belongs to the role (scripts/doorbell.py, scripts/harness.py): a verified routine stays the role's wake across any holder change; no lineage or session test; a legacy pin keeps its holder rule

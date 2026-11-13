@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.15 (2026-11-13): laconic covers all output
+Scope items (verbatim):
+- Laconic skill (skills/laconic/SKILL.md): all output of envoy, curator, ops-coder, steward; no mail exemption, no work narration; chat to him at most 3 lines; critic, secretary, design-system exempt
+
+Ships alone, at the operator's request (his words: "Laconic language should be updated immediately."; "Publish the ee plugin update first."), as an override of the 7-day cycle. Agent mail is as long as it needs to be; detail comes on "elaborate". Other etiquette drafts wait for the next regular release.
+
 ## 0.2.14 (2026-11-11): operator rules in the skills, path scrub
 Scope items (verbatim):
 - Scrub (communication and continuity references/more.md, cv-writing/SKILL.md, CHANGELOG.md): no user name, full name, home path or workspace path ships; the 0.24 hatstand guard passes

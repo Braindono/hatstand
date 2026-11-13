@@ -1483,7 +1483,7 @@ class State:
         self.wake_old = {}         # 0.24.0 (item 13): trigger -> role of a verified routine a new registration replaced, until wake.disabled
         self.wake_disabled = set() # 0.24.0 (item 13): triggers reported disabled (wake.disabled)
         self.role_handoffs = {}    # 0.24.0 (item 11): role -> {agent, t, capsule} of the role's latest agent.handed_off
-        self.trig_fires = {}       # 0.24.0 item 3: trigger -> [(trigwake seq, role, status)] for `woke` reports with a parsed status, in report order
+        self.trig_fires = {}       # 0.24.0 item 3: trigger -> [(trigwake seq, role, status, gone)] for woke, held and skipped reports with a parsed status, in report order
         self.cases = {}            # 0.23.0 (item 2): case id -> folded case (see _case_fold)
         self.case_by_source = {}   # source_seq -> case id (one case per ledger event)
         self.case_cards = {}       # trace card id -> case id
@@ -1761,12 +1761,16 @@ class State:
             if d.get("msg_id") and d.get("trigger"):
                 self.trigwake_msgs.setdefault(d["msg_id"], []).append((d["trigger"], ev["seq"]))
                 self.trigwake_role[d["msg_id"]] = d.get("role")
-        elif typ == "nudge.result" and d.get("outcome") == "woke" and d.get("msg_id") in self.trigwake_msgs:
+        elif typ == "nudge.result" and d.get("outcome") in ("woke", "held", "skipped") and d.get("msg_id") in self.trigwake_msgs:
             import doorbell as _D
-            if isinstance(d.get("status"), int) and not isinstance(d.get("status"), bool):   # 0.24.0 item 3: staleness by status
+            fst = d.get("status")
+            if not (isinstance(fst, int) and not isinstance(fst, bool)) and d.get("outcome") in ("held", "skipped"):
+                fst = _D.fire_status(d.get("reason"))        # 0.24.2: a held or skipped report written before 0.24.2 has no `status`: read its reason
+            if isinstance(fst, int) and not isinstance(fst, bool):   # 0.24.0 item 3: staleness by status; 0.24.2: held and skipped too
+                gone = _D.fire_is_gone(fst, d.get("reason"))
                 for trig, sq in self.trigwake_msgs[d["msg_id"]]:
-                    self.trig_fires.setdefault(trig, []).append((sq, self.trigwake_role.get(d["msg_id"]), d["status"]))
-            if _D.result_spends(d):
+                    self.trig_fires.setdefault(trig, []).append((sq, self.trigwake_role.get(d["msg_id"]), fst, gone))
+            if d.get("outcome") == "woke" and _D.result_spends(d):
                 for trig, sq in self.trigwake_msgs[d["msg_id"]]:
                     self.trig_spent.setdefault(trig, []).append(sq)
         elif typ == "session.bound":

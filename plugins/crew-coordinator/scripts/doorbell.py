@@ -181,6 +181,7 @@ _FIRE_PHRASE = re.compile(r"(?<![0-9A-Za-z])([45][0-9]{2})\s*(?:not found|server
 _FIRE_FMT = re.compile(r"HTTP ([1-5][0-9]{2})(?![0-9])")
 FIRE_FORMAT = "reason must start with HTTP <3 digits>"
 FIRE_GONE = (401, 403, 404, 410)        # the routine is gone or no longer ours: the pin goes stale at once
+FIRE_GONE_TEXT = "persistent_session_gone"   # 0.24.2 (RD-0d97a): HTTP 400 with this text in the reason: the routine's bound session is gone, stale at once
 FIRE_STALE_AFTER = 3                    # any other failed status (408, 429, 5xx, ...): stale after 3 failed fires in a row for the role
 
 
@@ -198,14 +199,20 @@ def fire_effect(status):
     return "gone" if int(status) in FIRE_GONE else "failed"
 
 
+def fire_is_gone(status, reason):
+    """0.24.2 (RD-0d97a): a fire that is gone for good: a FIRE_GONE status, or HTTP 400 whose reason names persistent_session_gone."""
+    return int(status) in FIRE_GONE or (int(status) == 400 and FIRE_GONE_TEXT in str(reason or ""))
+
+
 def fire_stale(st, trig, role, after_seq):
     """The status that made a pin stale through its reported fires after `after_seq`, or None. Read from the State fold (State.trig_fires):
-    fires through this trigger for this role, in report order. A 2xx resets the count of failed fires in a row."""
+    fires through this trigger for this role, in report order. A 2xx resets the count of failed fires in a row. 0.24.2: held and skipped
+    reports count too; HTTP 400 persistent_session_gone is stale at once."""
     fails = 0
-    for sq, r, status in (getattr(st, "trig_fires", None) or {}).get(trig, ()):
+    for sq, r, status, gone in (getattr(st, "trig_fires", None) or {}).get(trig, ()):
         if sq <= after_seq or (r and role and r != role):
             continue
-        eff = fire_effect(status)
+        eff = "gone" if gone else fire_effect(status)
         if eff == "woken":
             fails = 0
         elif eff == "gone":
@@ -1361,8 +1368,12 @@ def record_result(h, caller, msg_id, outcome, reason=None, fire=None):
             status = fire_status(why)
             if status is None:
                 raise H.HarnessError(FIRE_FORMAT + " (for example HTTP 200 or HTTP 404); nothing was recorded, report again")
+        if outcome in ("held", "skipped") and by_trig:     # 0.24.2 (RD-0d97a): a held or skipped fire that names its status counts too
+            status = fire_status(why)
+            if outcome == "skipped" and status is not None and 200 <= status <= 299:     # a 2xx run is not a skip: it would reset the failure count and dodge the always-rings rule
+                raise H.HarnessError("a fire that ran with HTTP %d is reported woke, not skipped; nothing was recorded, report again" % status)
         code = (_SKIP_CODE.match(why.lower()) or [None, ""])[1] if outcome == "skipped" else ""
-        if outcome == "skipped" and kind in RING_KINDS and code not in SKIP_OK:
+        if outcome == "skipped" and kind in RING_KINDS and code not in SKIP_OK and status is None:     # 0.24.2: a fire's HTTP status is a reason too
             # 0.24.0 (item 5, R1): the three answer kinds always ring; a skip needs a reason from the fixed list (nothing is recorded)
             raise H.HarnessError("a %s always rings: skipped needs one of these reasons: %s (any other, such as 'not needed', is refused; "
                                  "nothing was recorded, ring the recipient and report again)" % (kind, ", ".join(SKIP_OK)))
@@ -1416,7 +1427,7 @@ def record_result(h, caller, msg_id, outcome, reason=None, fire=None):
     data = {"msg": msg_id, "msg_id": msg_id, "by": caller, "for": offer.get("from"), "outcome": outcome, "reason": why}
     if ev:
         data["evidence"] = dict(ev, self_reported=True)
-    if status is not None and outcome == "woke":
+    if status is not None and outcome in ("woke", "held", "skipped"):
         data["status"] = status                 # 0.24.0 (item 3.3): the parsed status; events without it replay with the old reader
 
     def _fresh(store):
