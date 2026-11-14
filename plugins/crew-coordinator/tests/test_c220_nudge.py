@@ -105,7 +105,8 @@ class Item6RoleOnly(Base):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": ""}):
             self.reg("curator", None)
         r = self.send(self.plain, "role:curator")
-        self.assertEqual(r["nudge"], "none (no app session id: mail only)")
+        self.assertEqual(r["nudge"], "miss (no_route)")                       # round 7 C6
+        self.assertEqual(len([e for e in self.h.store.read_all() if e["type"] == "nudge.miss"]), 1)                                               # exactly one counted miss
         self.assertEqual(self.events("nudge.offered"), [])
 
     def test_6c_compaction_in_the_same_chat_keeps_the_address(self):
@@ -139,9 +140,10 @@ class Item6RoleOnly(Base):
         self.assertTrue(do.startswith("Do: RemoteTrigger action=run trigger_id=" + TRIG))
         self.assertNotIn("SendMessage", do)
 
-    def test_6h_another_machine_gets_mail_only_and_never_alarms(self):          # critic m-00ea2ad60bc4, m-fcb579e7e932
+    def test_6h_another_machine_gets_no_ring_a_counted_miss_and_never_alarms(self):          # critic m-00ea2ad60bc4, m-fcb579e7e932
         pc = self.reg("curator", "local_pc", machine="machine-pc")
-        self.assertEqual(self.send(self.plain, "role:curator")["nudge"], "none (holder on another machine: mail only)")
+        self.assertEqual(self.send(self.plain, "role:curator")["nudge"], "miss (no_route)")      # round 7 C6
+        self.assertEqual(len([e for e in self.h.store.read_all() if e["type"] == "nudge.miss"]), 1)                                               # exactly one counted miss
         self.assertEqual(self.events("nudge.offered"), [])
         t0 = time.time()
         for k in range(18):                                                    # three hours of scans, half from the PC
@@ -166,7 +168,8 @@ class Item6RoleOnly(Base):
 
     def test_0221_a_different_machine_id_stays_mail_only_whatever_the_hostname(self):
         self.reg("curator", "local_other", machine="machine-other", hostname=H.HOSTNAME)
-        self.assertEqual(self.send(self.plain, "role:curator")["nudge"], "none (holder on another machine: mail only)")
+        self.assertEqual(self.send(self.plain, "role:curator")["nudge"], "miss (no_route)")      # round 7 C6
+        self.assertEqual(len([e for e in self.h.store.read_all() if e["type"] == "nudge.miss"]), 1)                                               # exactly one counted miss
 
     def test_0221_a_record_without_an_id_routes_only_by_this_machines_own_host_names(self):   # A-4d611 item 4
         self.reg("envoy", "local_learn", hostname="host-a")                       # a 0.22.1 registration: host-a is an alias now

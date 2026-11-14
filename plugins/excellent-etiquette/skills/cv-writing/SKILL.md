@@ -1,6 +1,6 @@
 ---
 name: cv-writing
-description: "Use when: writing or editing resumes and cover letters, or publishing them (cv-management)."
+description: "Use when: writing or editing resumes and cover letters, or publishing them (cv-management). General rules: CORE.md."
 ---
 
 # cv-writing
@@ -11,8 +11,6 @@ description: "Use when: writing or editing resumes and cover letters, or publish
 - [project:cv-management] P-13 Before/After: blockquote paragraphs; color only changed words (red old, green new).
 - [project:cv-management] P-14 After each Before/After: # / Rationale / Conf table (H KB or his words, M judgment, L speculative).
 - [project:cv-management] P-15 Saved-job fit: analyze all jobs at once; ask one job per turn.
-- [project:cv-management] P-37 Run polished-prose on resume/letter prose before fit-check and on drafts; if missing, stop and report.
-- [project:cv-management] P-38 Keep the writer's adverbs; polish must not strip them.
 - [project:cv-management] P-55 Post-graduate vocabulary; temper on resumes.
 - [project:cv-management] P-56 Active voice.
 - [project:cv-management] P-57 Keep casual flair ("really," "happily," opening "And"); no flat colloquialisms.
@@ -29,3 +27,4 @@ description: "Use when: writing or editing resumes and cover letters, or publish
 - [project:cv-management] P-77 Superseded files to resumes/ or letters/_archive; never delete.
 - [project:cv-management] P-78 Listings: listings_dir/<YYYY-MM-DD>/<company>-<slug>.md, one top-level manifest.md.
 - [project:cv-management] P-79 Skills JSON at top of CV_Management/; several files in CV_Management/operator stats/.
+- [project:cv-management] Run polished-prose on resume and letter prose; if it is missing, stop and report.

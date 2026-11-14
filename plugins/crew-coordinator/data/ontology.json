@@ -242,7 +242,8 @@
    "broader": [],
    "aliases": [
     "audit",
-    "inspection"
+    "inspection",
+    "quality-gate"
    ]
   },
   {

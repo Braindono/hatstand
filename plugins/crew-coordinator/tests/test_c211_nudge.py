@@ -85,7 +85,8 @@ class IdRoute(Base):
         self.assertEqual(self.nudge(self.plain, r[:8], "result"), "none (result to a cold holder: mail only)")
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": ""}):
             e = self.reg("envoy", None)
-            self.assertEqual(self.nudge(self.plain, e[:8], "task"), "none (no app session id: mail only)")
+            self.assertEqual(self.nudge(self.plain, e[:8], "task"), "miss (no_route)")      # round 7 C6: a task nothing can reach counts a miss
+            self.assertEqual(len([e for e in self.h.store.read_all() if e["type"] == "nudge.miss"]), 1)                                    # exactly one, not none and not two
 
     def test_a_peer_cannot_set_another_agents_id(self):
         r = self.reg("curator", "local_mine")
@@ -122,7 +123,7 @@ class IdRoute(Base):
         n = self.nudge(a, r[:8], "task")
         self.assertTrue(n["do"].startswith("Do: SendMessage to %s:" % host))
         self.call("harness_admin", op="nudge_result", agent=a, args={"msg_id": n["msg_id"], "outcome": "skipped", "reason": "stale_id"})
-        self.assertIn("mail only", self.nudge(b, r[:8], "task"))                          # stale holds until the recipient calls
+        self.assertIn("miss (route_closed", self.nudge(b, r[:8], "task"))                  # stale holds until the recipient calls; round 7: a counted miss, not silence
         return r, c
 
     def test_t1_one_stale_report_clears_on_the_recipients_next_call_from_that_session(self):
@@ -137,7 +138,7 @@ class IdRoute(Base):
         r, c = self._mark_stale("local_t2")
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": "local_elsewhere"}):
             self.call("harness_inbox", agent=r)
-        self.assertIn("mail only", self.nudge(c, r[:8], "task"))
+        self.assertIn("miss (route_closed", self.nudge(c, r[:8], "task"))
         self.assertEqual(self.events("nudge.stale_cleared"), [])
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": "local_t2"}):
             self.call("harness_inbox", agent=r)

@@ -29,6 +29,7 @@ $H init                               # create config.json + OPERATOR.md
 $H record --agent <id> --kind decision|context|capsule|note --title "…" [--body …|--body-file f] [--tag t]… [--supersedes ID] [--offload]
 $H recall ["query"] [--kind k] [--tag t] [--limit 5] | recall --ids D-xxxxx,K-yyyyy [--budget 1500]
 $H publish [plugin-or-skill-dir] --notes "…" [--required]   # release registry (operator)
+$H publish … --hotfix RD-<id>   # 0.26.0: waives only the release cadence check; needs a current S1/S2 release defect of that plugin
 $H registry
 $H verify | export [--out file] | events [--since N]
 $H serve [--port 7717]       # live dashboard; /operator = chats needing action
@@ -47,7 +48,7 @@ Longer forms of rules that SKILL.md states in short form.
 
 - Identity: with MCP register, show the banner. Hook sessions: the app shows it, so don't repeat it. Pass its short id as `agent` everywhere. No banner: `harness_register project= model=<id>` first. A successor or resumed chat runs `/update` first.
 - `superseded by …`: stop; another chat holds your role (new chat: `/restore <role>`). Load only the tools you call.
-- Corpus: `decision` is a binding choice. Event ids (m-/t-/#N/actor) return event cards from recall. Recall/inbox output over 10k chars is cut to head+tail 5k. Docs live in `Exchange/corpus/` (auto-indexed).
+- Corpus: `decision` is a binding choice. Event ids (m-/t-/#N/actor) return event cards from recall. Recall/inbox output over 10k chars is cut to head+tail 5k. `harness_inbox` shows the first 600 characters of a notice, result or message over 1,000 characters, with a harness line (outside the untrusted fence) saying how many were cut; that mail stays unread until you `harness_recall ids=[m-...] agent=<you>` the whole text (a recall over about 10,000 characters is cut to head and tail and marks nothing read: add `budget=6000` for a long mail). A cut mail you have no ask waiting on is marked read at its second listing (the pointer stays); one you are waiting on stays unread until recalled whole. Tasks, questions, reviews, handoffs, mail that expects a reply and the operator's mail are never cut. Docs live in `Exchange/corpus/` (auto-indexed).
 - State note: on hook "State changed", add `state_note=` (≤1200 chars, `Next: … | Open: … | Verified: … | Chat: …`) to your next send/commit/sync/handoff.
 - Messaging: `harness_inbox` `wait` is in seconds (≤60). `to` accepts a sobriquet as well as an id. When the loop guard refuses a send, send `operator` a `question`. Keep bodies short. Set task states with `harness_admin op=task_update`.
 - Shared files: `granted:false` means don't edit; message the holder. `drift:true`: re-read first.

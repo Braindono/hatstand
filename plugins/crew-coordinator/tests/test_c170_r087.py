@@ -3,7 +3,7 @@
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import _env  # noqa: F401  isolate HOME and HARNESS_* first
-import contextlib, io, json, os, subprocess, sys, tempfile, unittest
+import contextlib, io, json, os, shutil, subprocess, sys, tempfile, unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -74,6 +74,12 @@ class Launchers(unittest.TestCase):
         with open(t, "w") as f:
             f.write("print(1)\n")
         self.assertIn("tool", LN.plan(self.ex, self.dest, {"operator_launchers": {"tool": t}})["write"])
+        # round 3 (test isolation): H.main below runs a Harness on self.ex, which writes OPERATOR.md and _harness/ under the shared test HOME;
+        # remove what this test created so a later test that resolves the Exchange OPERATOR.md under the test HOME (test_c250_item38) finds nothing
+        for rel in ("OPERATOR.md", "_harness"):
+            p_ = os.path.join(self.ex, rel)
+            if not os.path.lexists(p_):
+                self.addCleanup(lambda p_=p_: shutil.rmtree(p_, True) if os.path.isdir(p_) else (os.path.exists(p_) and os.remove(p_)))
         os.makedirs(os.path.join(self.ex, "_harness"), exist_ok=True)
         with open(os.path.join(self.ex, "_harness", "config.json"), "w") as f:
             json.dump({"operator_launchers": {"tool": t}}, f)

@@ -67,7 +67,7 @@ class Item18(C.Base):
         mid = self.nudge()
         self.ask(mid)
         self.call("harness_inbox", agent=self.cur)                                 # the recipient reads first
-        self.assertEqual(self.ev("relay.closed"), [{"msg_id": mid, "reason": "read"}])
+        self.assertEqual(self.ev("relay.closed"), [{"msg_id": mid, "to": self.cur, "reason": "read"}])      # round 7 (class A): the close names its recipient
         self.assertIsNone(self.poll(a))
         self.assertEqual(self.ev("nudge.relay_claim"), [])
         self.assertEqual(D.relay_notice_lines(self.h, self.h.state(), self.cloud, now=time.time() + 700), [])

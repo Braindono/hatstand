@@ -112,7 +112,8 @@ class RestoreAuto(Base):
         a = self.holder()
         rel = self.handoff(a)
         self.assertIn("pending", self.restore(rel, project="other"))
-        self.assertIn("pending", M.call(self.h, "harness_restore", {"role": "lead", "model": MODEL, "confirmed": True}))
+        # 0.26.0 (item 17): with no capsule path the holder's own recorded handoff is the match, so only a mismatch still falls back
+        self.assertIn("pending", M.call(self.h, "harness_restore", {"role": "lead", "model": MODEL, "confirmed": True, "project": "other"}))
 
     def test_disabled_in_operator_json(self):
         a = self.holder()

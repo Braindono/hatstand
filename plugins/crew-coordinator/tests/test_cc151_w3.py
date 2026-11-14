@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
 import harness as H
 import corpus as C
 import ctx_hook as X
-import inbox_ladder as L
+import inbox_reminder as L
 import insight_share as I
 
 MODEL = "claude-sonnet-5-5"

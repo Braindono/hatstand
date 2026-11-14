@@ -266,7 +266,8 @@ class Sim(unittest.TestCase):
     def test_s4_b1_a_name_at_the_call_site_fails_i3b(self):                            # critic S4 blocker 1 (F3)
         cand = candidate(self.tmp, patch={"scripts/doorbell.py": (
             # 0.24.0 (item 13): the anchor follows the call site's new fields= argument; the injected fault is the same
-            '"do": " ; ".join(_do_one(x, g, line, mid, fields=bool(g and registered_trigger(st, g))) for _, _, x, g in ring)}',
+            # 0.26.0 (item 12): the call site is now _do_many (one text for several recipients); the injected fault is the same
+            '"do": _do_many(ring, line, mid, st)}',
             '"do": " ; ".join(_do_one(x, g, line, mid) + " " + str(a.get("sobriquet")) for _, a, x, g in ring)}')})
         answer_all(cand)
         self.assertIn("I3b the Do-line carries a name, a ROLE row or a ListAgents check (role-only addressing, D-3e5e7)",

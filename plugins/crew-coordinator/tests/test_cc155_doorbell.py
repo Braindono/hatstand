@@ -101,7 +101,7 @@ class Nudge(DB):
         r = self.send(self.a, self.b, body="do it")
         box = self.h.inbox(self.b, unread_only=True, mark_read=False)
         self.assertEqual(box["owed"], [r["id"]])
-        self.assertIn("owed reply 1: " + r["id"], box["text"])   # 0.17.0 (R-055): count + newest 3
+        self.assertIn("owed reply 1 (operator first, then oldest first):\n  " + r["id"], box["text"])   # 0.26.0 (item 9): lines with age, oldest first
 
 
 class Listen(DB):

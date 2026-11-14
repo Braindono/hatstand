@@ -24,10 +24,10 @@ S, I, B, ARR = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}, {"t
 ADMIN_OPS = ["whoami", "ledger", "thread", "status", "set_expertise", "task_update", "group", "retire",
              "set_project", "roster", "role_define", "role_assign", "release_scope", "wake_register", "wake_verify", "wake_disabled", "registry", "verify", "export", "reload", "health", "archive", "unarchive", "pin",
              "approvals", "flag_release", "publish_release", "pin_corpus_index", "retag", "listen", "vault_write", "operator_script", "hatstand_sync", "lesson_curate", "concept_link", "concept_unlink", "recall_report", "notify_sent", "approvals_pending", "session_titled", "notify_undelivered", "nudge_result", "drift_explain", "case", "proctor_shadow",
-             "notify_listed", "release_defect"]   # 0.24.0 (A-b2950 items 8, 9)
+             "notify_listed", "release_defect", "owed_close", "owed"]   # 0.24.0 (A-b2950 items 8, 9)
 # 0.12.1 (C-01dcf): allowed args per admin op; unknown keys are an error, never silently ignored.
 ADMIN_ARGS = {
-    "whoami": set(), "ledger": {"active_only"}, "thread": {"thread"}, "status": {"path"},
+    "whoami": set(), "ledger": {"active_only"}, "thread": {"thread"}, "owed_close": {"ids", "reason"}, "owed": {"limit"}, "status": {"path"},
     "set_expertise": {"expertise", "task", "confirmed"},
     "task_update": {"task_id", "state", "note", "stage", "to", "digest"},
     "group": {"group", "leave"}, "retire": {"target", "reason"}, "set_project": {"target", "project"},
@@ -49,7 +49,7 @@ ADMIN_ARGS = {
     # 0.23.0 (A-08480 item 2): proctor case events; each action also rejects the keys it does not use (H.Harness.CASE_ARGS)
     "case": {"action", "case", "source", "severity", "magnitude", "family", "summary", "subject", "rule_ids", "rationale", "diff", "cause",
              "contributing", "owner", "to", "backlog_ref", "old", "new", "reason", "verdict", "of_seq", "outcome", "ref", "cases", "expires",
-             "sample"},
+             "sample", "status", "date"},
     "proctor_shadow": {"on", "reason"},
     "retag": {"entry", "project", "role", "ref", "dry_run"},
     "listen": {"action"},
@@ -59,7 +59,7 @@ ADMIN_ARGS = {
     "approvals": {"all"}, "lesson_curate": {"ids", "keys"},
     "concept_link": {"entry", "concept", "role"}, "concept_unlink": {"entry", "concept"},
     "recall_report": {"weeks"},
-    "notify_sent": {"id"}, "approvals_pending": set(), "session_titled": {"title", "status"}, "notify_undelivered": set(), "nudge_result": {"msg_id", "outcome", "reason", "prompt", "enabled", "session"},   # 0.24.0 item 13: fire fields
+    "notify_sent": {"id"}, "approvals_pending": set(), "session_titled": {"title", "status"}, "notify_undelivered": set(), "nudge_result": {"msg_id", "outcome", "reason", "prompt", "enabled", "session", "to"},   # 0.24.0 item 13: fire fields
     "notify_listed": {"ids"},
     "release_defect": {"plugin", "version", "found_in", "severity", "summary", "refs", "supersedes"},   # 0.24.0 item 9
     "flag_release": {"name", "retired", "replaced_by", "external"},
@@ -182,7 +182,7 @@ TOOLS = [
     ("harness_send", "Message. to: id|name|list|role:x|group:x|*|operator. reply_to continues thread. "
                      "kind: message|task|handoff|result|question|notice|review. state_note=role state ≤1200 chars.",
      {"agent": A, "to": S, "body": S, "subject": S, "kind": S, "reply_to": S, "refs": ARR, "state_note": S, "topic": S}, ["agent", "to", "body"]),
-    ("harness_inbox", "Unread mail. wait=secs long-poll. peek=true lists it without marking it read.", {"agent": A, "wait": I, "peek": B}, []),
+    ("harness_inbox", "Unread mail. peek=true lists it without marking it read. full=true keeps long bodies whole.", {"agent": A, "wait": I, "peek": B, "full": B}, []),
     ("harness_claim", "Lease file(s) before editing; returns version. path may be a list (Haiku agents: max 2 files per call, P-40).", {"agent": A, "path": {"anyOf": [S, ARR]}, "intent": S, "ttl": I},
      ["agent", "path"]),
     ("harness_release", "Release lease (no path = all).", {"agent": A, "path": S}, ["agent"]),
@@ -249,6 +249,7 @@ def auto_reload_check(h):
 def reexec(h):
     if h is not None:
         try:
+            h.measure_flush()
             h.store.append("server.stopped", "system", {"host": H.HOSTNAME, "pid": os.getpid(), "reason": "reload"})
         except Exception:
             pass
@@ -289,6 +290,10 @@ def admin(h, a):
         return h.ledger(include_inactive=not x.get("active_only", True))
     if op == "thread":
         return h.thread(x["thread"])
+    if op == "owed":     # round 6 (item 4): every owed id, read only
+        return h.owed_list(ag, x.get("limit") or 100)
+    if op == "owed_close":    # 0.26.0 (item 10): a role dismisses owed items addressed to it; no approval, task state untouched
+        return h.owed_close(ag, x.get("ids"), x.get("reason"))
     if op == "status":
         return h.status(x.get("path"))
     if op == "set_expertise":
@@ -363,7 +368,7 @@ def admin(h, a):
     if op == "nudge_result":   # 0.21.1 (A-58ff8 item 4): the sender reports whether the nudge rang
         import doorbell
         res = doorbell.record_result(h, caller_id(h, ag), x.get("msg_id"), x.get("outcome"), x.get("reason"),
-                                     fire={k: x[k] for k in ("prompt", "enabled", "session") if k in x})
+                                     fire={k: x[k] for k in ("prompt", "enabled", "session") if k in x}, to=x.get("to"))
         doorbell.settle(h, caller_id(h, ag))
         return res
     if op == "notify_undelivered":   # 0.21.0 (critic D2): the cloud fallback's reader for the secretary digest; read-only, each notify id once
@@ -402,6 +407,12 @@ def admin(h, a):
         cid = h.resolve(st, ag, follow=False)
         if h.curation_allows(st, cid, "archive"):
             return h.archive(ag, x["ids"], x.get("reason", ""), rv, ack)
+        if h.housekeeping_allows(st, cid) and h.routine_entries(_ids(x["ids"])):     # 0.26.0 (item 17): routine entries need no approval
+            try:
+                return h.archive(ag, x["ids"], x.get("reason", ""), rv, ack, _tier=True)     # round 3 F6: the steward's tier for the envoy too
+            except H.HarnessError as e:
+                if not str(e).startswith("S6:"):         # outside the steward tier: the operator decides, as before
+                    raise
         return pend(h, cid, "archive_operator", {"ids": _ids(x["ids"]), "reason": x.get("reason", ""), "review": rv, "ack": ack})
     if op == "unarchive":   # v2: back into search; unknown or live id is a no-op message
         st = h.state()
@@ -415,6 +426,8 @@ def admin(h, a):
         cid = h.resolve(st, ag, follow=False)
         if h.curation_allows(st, cid, "pin"):
             return h.pin(ag, x["ids"], not x.get("off"), x.get("reason", ""), rv)
+        if not x.get("off") and h.housekeeping_allows(st, cid) and h.routine_entries(_ids(x["ids"])):     # 0.26.0 (item 17)
+            return h.pin(ag, x["ids"], True, x.get("reason", ""), rv, _routine=True)
         return pend(h, cid, "pin_operator", {"ids": _ids(x["ids"]), "on": not x.get("off"), "reason": x.get("reason", ""), "review": rv})
     if op == "listen":   # 0.15.5 (WP4): /listen self-wake bookkeeping; the server decides, the agent claims nothing
         import doorbell
@@ -589,12 +602,62 @@ def _log_failed(h, name, a, err):
         pass
 
 
+def _drop_links(x):
+    """A `link` beside a `path` is the same file spelled twice: drop it, in nested rows too."""
+    if isinstance(x, dict):
+        if "link" in x and "path" in x:
+            x = {k: v for k, v in x.items() if k != "link"}
+        return {k: _drop_links(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_drop_links(v) for v in x]
+    return x
+
+
+def slim_result(name, a, r):
+    """0.26.0 (item 15): admin and lease results (harness_claim, harness_commit, harness_release, harness_admin) drop echoed inputs (a key the
+    caller passed whose value comes back unchanged), repeated links (a `link` beside its `path`) and null fields (and a lease's drift:false). Each result keeps what the caller acts on: ids, versions, states, holders, counts, refusals and advice."""
+    if name not in ("harness_claim", "harness_commit", "harness_release", "harness_admin") or not isinstance(r, dict) or "text" in r:
+        return r
+    args = dict(a.get("args") or {}) if name == "harness_admin" else {k: v for k, v in a.items() if k != "agent"}
+    r = _drop_links(r)
+    if name == "harness_admin" and a.get("op") == "set_expertise" and "sobriquet" in r:    # the whole agent record came back: keep what changed
+        r = {k: r.get(k) for k in ("short", "sobriquet", "expertise", "expertise_status", "task", "project", "role") if r.get(k) is not None}
+    multi = isinstance(r.get("claims"), list)
+
+    def _slim(d, top):
+        out = {}
+        for k, v in d.items():
+            if k in args and args[k] == v and k not in ("state", "outcome"):
+                continue                                                       # echoed input
+            if k == "agent" and isinstance(v, str) and a.get("agent") and str(a["agent"])[:8] == v[:8]:
+                continue                                                       # the caller's own id back
+            if k == "path" and top and not multi and name != "harness_admin" and v == _canon_echo(a, v):
+                continue                                                       # the one path the caller passed
+            if v is None or (v is False and name != "harness_admin" and k == "drift"):
+                continue                                                       # empty news: a null, or a lease's drift:false (an empty list or a false answer stays)
+            out[k] = v
+        return out
+    if multi:
+        return dict(r, claims=[_slim(c, False) if isinstance(c, dict) else c for c in r["claims"]])
+    return _slim(r, True)
+
+
+def _canon_echo(a, v):
+    """The path the caller passed, as the server spells it (a canonical key); equal means the result only echoes the input."""
+    p = a.get("path")
+    return v if p == v or (isinstance(p, str) and isinstance(v, str) and (v.endswith("/" + p.strip("/")) or p.endswith(v))) else None
+
+
 def call(h, name, a):
     try:
         r = _call(h, name, a)
     except Exception as e:
         _log_failed(h, name, a, e)
         raise
+    try:
+        r = slim_result(name, a if isinstance(a, dict) else {}, r)
+    except Exception:
+        pass
     if isinstance(a, dict) and a.get("agent") and not (name == "harness_admin" and a.get("op") == "nudge_result"):
         try:    # 0.22.3 (A-8a3da item 3): a live local role holder's call may carry one relay Do-line for a sender that cannot ring
             import doorbell
@@ -754,9 +817,9 @@ def _call(h, name, a):
         return r_
     if name == "harness_inbox":
         r_ = h.inbox(a["agent"], a.get("unread_only", True), a.get("mark_read", True) and not a.get("peek"),   # 0.21.0 item 2: peek marks nothing
-                     _bounded_int(a.get("wait", 0), 0, 60, 0), _bounded_int(a.get("limit", 20), 1, 200, 20))
+                     _bounded_int(a.get("wait", 0), 0, 60, 0), _bounded_int(a.get("limit", 20), 1, 200, 20), full=bool(a.get("full")))
         if defaulted and isinstance(r_, dict) and isinstance(r_.get("text"), str):      # item 37: say why nothing was marked read
-            r_["text"] = "defaulted agent: peek only; pass agent=<id> to mark read\n" + r_["text"]
+            r_["text"] = "peek only: pass agent= to mark read\n" + r_["text"]
         return r_
     if name == "harness_thread":
         return h.thread(a["thread"])
@@ -824,7 +887,18 @@ def _call(h, name, a):
             return dict(r_, retired="this chat is retired: after the operator approves, call harness_restore again with "
                                     "approval=<pending id>, the same role/model/project/task/capsule and agent=<your id>") \
                 if isinstance(r_, dict) else r_
-        if confirmed and not appr_:   # 0.15.1: overriding a holder seen < 10 min ago is the operator's call; a dead holder changes nothing
+        auto_done = False
+        if not confirmed and not appr_ and isinstance(a.get("role"), str):
+            # 0.26.0 (item 17): a holder seen < 10 min ago whose own handoff capsule matches and who is idle: the restore confirms itself
+            st = h.state()
+            R_ = st.roles.get(a["role"]) or {}
+            hid_ = st.current(R_["holder"]) if R_.get("holder") else None
+            hold_ = st.agents.get(hid_) if hid_ else None
+            if hold_ and hold_["status"] in ("active", "idle") and hold_.get("handed_off") and st.now - hold_["last_seen"] < 600:
+                ok_, why_, auto_ = h.restore_auto_check(a["role"], a.get("capsule"), a.get("project"), need_idle=True)
+                if ok_:
+                    confirmed, auto, auto_done = True, auto_, True
+        if confirmed and not appr_ and not auto_done:   # 0.15.1: overriding a holder seen < 10 min ago is the operator's call; a dead holder changes nothing
             st = h.state()
             R = st.roles.get(a["role"]) or {}
             hid = st.current(R["holder"]) if R.get("holder") else None
@@ -878,6 +952,7 @@ def main():
     finally:
         if h is not None:
             try:
+                h.measure_flush()
                 h.store.append("server.stopped", "system", {"host": H.HOSTNAME, "pid": os.getpid()})
             except Exception:
                 pass
@@ -953,6 +1028,8 @@ def serve_loop(h, home_error, out):
                         if ft:
                             txt += "\n" + ft
                     res = {"content": [{"type": "text", "text": txt}]}
+                    tool_ = str(p.get("name") or "")
+                    h.measure(tool_ + (":" + str(args.get("op")) if tool_ == "harness_admin" and args.get("op") else ""), len(txt.encode("utf-8")))   # item 16
                 except H.HarnessError as e:
                     res = {"content": [{"type": "text", "text": json.dumps({"error": str(e)})}], "isError": True}
             else:

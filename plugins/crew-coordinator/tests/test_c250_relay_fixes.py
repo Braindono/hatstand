@@ -268,11 +268,11 @@ class Fixes(I.C.Base):
         self.assertGreaterEqual(n, 1)
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_HOST_SESSION_ID": "local_f2"}):
             r = self.call("harness_inbox")                  # defaulted: peek
-            self.assertTrue(self.text(r).startswith("defaulted agent: peek only; pass agent=<id> to mark read"))
+            self.assertTrue(self.text(r).startswith("peek only: pass agent= to mark read"))
             self.call("harness_inbox", mark_read=True)      # still peek, whatever the caller asks
         self.assertEqual(len(self.h._inbox_ids(self.h.state(), a, True)), n)
         r = self.call("harness_inbox", agent=a)             # explicit agent: reads and marks as before, no peek note
-        self.assertNotIn("defaulted agent", self.text(r))
+        self.assertNotIn("peek only", self.text(r))
         self.assertEqual(len(self.h._inbox_ids(self.h.state(), a, True)), 0)
 
     # item 26

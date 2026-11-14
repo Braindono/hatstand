@@ -13,7 +13,6 @@ import harness as H
 import mcp_server as M
 import ctx_hook as C
 import hash_vectors as HV
-import inbox_ladder as IL
 from test_cc151_w1 import Base
 from test_release_gates import mkzip
 
@@ -306,10 +305,6 @@ class Robustness(Base):
             C.gauge({"session_id": "s1"}, "x")
             self.assertEqual(C.read_state(mark).strip(), "")
 
-    def test_ladder_caps_rungs(self):
-        r = IL.parse_ladder("5,999999,1,1,1,1,1,1,1,1")
-        self.assertLessEqual(len(r), 8)
-        self.assertLessEqual(max(r), 600)
 
 
 if __name__ == "__main__":

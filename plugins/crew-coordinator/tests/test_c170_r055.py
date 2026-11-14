@@ -79,21 +79,17 @@ class ReloadLine(Base):
 
 
 class OwedTail(Base):
-    def test_count_and_newest_three(self):
-        ids = [self.h.send(self.a, self.b, f"task {i}", kind="task")["id"] for i in range(5)]
+    def test_lines_with_age_oldest_first_and_a_count_line_past_the_cap(self):
+        ids = [self.h.send(self.a, self.b, f"task {i}", kind="task")["id"] for i in range(7)]
         t = self.h.inbox(self.b, mark_read=False)["text"]
-        self.assertIn(f"owed reply 5: {ids[4]} {ids[3]} {ids[2]} +2 older (harness_admin op=thread)", t)
-        for old in ids[:2]:
-            self.assertNotIn(old, t.splitlines()[-1])
+        tail = t[t.index("owed reply 7"):].splitlines()
+        self.assertEqual(tail[0], "owed reply 7 (operator first, then oldest first):")
+        self.assertEqual([x.split()[0] for x in tail[1:6]], ids[:5])                 # oldest first, five lines
+        self.assertTrue(all(x.split()[1][-1] in "mhd" for x in tail[1:6]))            # each shows its age
+        self.assertEqual(tail[6], "  +2 more (harness_admin op=owed lists every id)")             # nothing hidden silently
 
 
-class LadderAndCaps(Base):
-    def test_short_ladder(self):
-        r = self.h.send(self.a, self.b, "do x", kind="task")
-        lad = r["ladder"]
-        self.assertEqual(set(lad), {"waits", "max_wait", "end", "how"})
-        self.assertLess(len(lad["how"]), 100)
-
+class Caps(Base):
     def test_raised_cap_defaults(self):
         self.assertEqual((D.DEFAULTS["nudge_per_agent_hour"], D.DEFAULTS["nudge_per_pair_hour"], D.DEFAULTS["global_per_hour"]),
                          (10, 6, 30))

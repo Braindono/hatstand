@@ -161,6 +161,11 @@
           },
           {
             "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ctx_hook.py\" virtue",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/lesson_cue.py\"",
             "timeout": 5
           }

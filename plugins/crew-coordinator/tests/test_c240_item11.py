@@ -30,7 +30,8 @@ class Item11(C.Base):
         r = self.send(self.plain, "role:design-system")
         hs = r["holder"]["design-system"]
         self.assertRegex(hs, r"^handed_off since \d{4}-\d\d-\d\dT\d\d:\d\dZ \(capsule %s\)$" % re.escape(ho["capsule"]))
-        self.assertEqual(r["nudge"], "none (no live holder: queued for the next restore)")
+        self.assertEqual(r["nudge"], "none (no live holder: queued for the next restore; miss counted)")
+        self.assertEqual(len([e for e in self.h.store.read_all() if e["type"] == "nudge.miss"]), 1)       # exactly one counted miss
         self.assertEqual(self.events("nudge.offered"), [])                       # the handed-off chat is not rung
         d = self.events("agent.handed_off")[-1]["data"]
         self.assertEqual((d["role"], d["capsule"]), ("design-system", ho["capsule"]))
@@ -67,7 +68,8 @@ class Item11(C.Base):
     def test_h2_a_vacant_role(self):
         r = self.send(self.plain, "role:design-system")
         self.assertEqual(r["holder"], {"design-system": "vacant"})
-        self.assertEqual(r["nudge"], "none (no live holder: queued for the next restore)")
+        self.assertEqual(r["nudge"], "none (no live holder: queued for the next restore; miss counted)")
+        self.assertEqual(len([e for e in self.h.store.read_all() if e["type"] == "nudge.miss"]), 1)       # exactly one counted miss
 
     # H3
     def test_h3_a_holder_with_no_local_id_and_a_pin_is_live_wake_pin(self):

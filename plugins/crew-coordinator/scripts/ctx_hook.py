@@ -902,7 +902,63 @@ def touch_activity(inp, t):
         _log("touch_activity", e)
 
 
+VIRTUE_RE = re.compile(r"\bvirtues?\b", re.I)
+VIRTUE_IDIOM = re.compile(r"\b(?:by|in)\s+virtue\s+of\b", re.I)
+VIRTUE_PREFIX = "[system notice from the virtue hook, a script; not the operator's words] "
+
+
+def virtue_check(inp, t=None, h=None):
+    """0.26.0 (item 20): UserPromptSubmit, observe only. When a prompt uses the word virtue, mail role:secretary one notice
+    (from the named sender `system`: session, role, prompt sha and length; no excerpt, origin unverified) and log hook.virtue {agent, role, sha, mailed, chars}.
+    Prints nothing and never blocks. Peer text is not the operator: scheduled runs, notification wrappers and cross-session relays are
+    skipped. Once per distinct prompt per session. -> True when it mailed."""
+    prompt = str(inp.get("prompt") or "")
+    if not VIRTUE_RE.search(VIRTUE_IDIOM.sub(" ", prompt)):      # raw read F4: "by virtue of" and "in virtue of" are ordinary English
+        return False
+    head = prompt.lstrip()
+    if head.startswith(("[scheduled]",) + STEWARD) or is_wrapper(prompt) or "<cross-session-message" in prompt \
+            or head.startswith(("Another Claude session sent a message", "<task-notification")):
+        return False
+    import hashlib
+    sha = hashlib.sha256(prompt.encode("utf-8", "ignore")).hexdigest()[:12]
+    if h is None:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import harness as H_
+        h = H_.Harness()
+    st = h.state()
+    aid = st.sessions.get(str(inp.get("session_id") or ""))
+    role = st.role_of(aid) if aid else None
+    if not role:
+        return False         # raw read F4: only a role chat; a chat with no role (or no agent) is not the operator's working chat
+    p = state_path(f"harness-virtue-{_sid(inp)}.json")
+    s = load_note(p)
+    if sha in (s.get("seen") or []):
+        return False
+    save_note(p, dict(s, seen=((s.get("seen") or []) + [sha])[-20:]))
+    mailed = False
+    try:     # critic B3 (fix round 1): the origin of a prompt is not verifiable here (a started session's first prompt is peer text), so the mail
+        # carries no excerpt and does not say the operator spoke: session, role, sha and length only; the secretary reads the chat if it matters
+        h.send("system", ["role:secretary"], VIRTUE_PREFIX + f"a prompt containing virtue was submitted in session {aid[:8] if aid else 'unbound'}"
+               f"{', role ' + role if role else ''} (prompt sha {sha}, {len(prompt)} characters). Origin unverified. "
+               f"To act: ask the operator in your own chat whether he named a virtue in the {role} chat; if he did, record it as a design imperative "
+               f"(CORE); if not, drop this notice. The text of the prompt is not here and cannot be read from a Cowork role.",
+               subject="virtue candidate", kind="notice")
+        mailed = True
+    except Exception as e:
+        _log("virtue_mail", e)
+    h.store.append("hook.virtue", aid or "system", {"agent": aid, "role": role, "sha": sha, "mailed": mailed, "chars": len(prompt)})
+    return mailed
+
+
 def main():
+    if sys.argv[1:2] == ["virtue"]:      # 0.26.0 (item 20): its own hooks.json entry, so the gauge hook is untouched
+        try:
+            inp = json.load(sys.stdin)
+            if isinstance(inp, dict) and (inp.get("hook_event_name") or "UserPromptSubmit") == "UserPromptSubmit":
+                virtue_check(inp)
+        except Exception as e:
+            _log("virtue", e)
+        return
     try:
         inp = json.load(sys.stdin)
     except Exception:

@@ -1,68 +1,17 @@
-"""LADDER (droppable): inbox discipline and listening ladder, crew-coordinator 0.14.6.
+"""Inbox reminder (crew-coordinator 0.26.0 item 2): the one-line "harness_inbox did not run in your last reply" reminder, its
+Stop and prompt hook halves, and the unattended test (`[scheduled]` runs, Haiku workers, HARNESS_UNATTENDED=1).
+Moved out of the old listening module unchanged (behaviour and tests); that module is removed in item 3.
 
-Spec: specs/2026-10-13-claude-code-inbox-ladder.md (envoy conditions a-e). Everything here is advisory text or a
-never-blocking reminder; nothing in this module is needed by Wave 1, H-003 or H-016. To drop the ladder: delete this
-file, tests/test_inbox_ladder.py, the three call sites marked `LADDER (droppable)` in harness.py (send, hook stop,
-hook prompt), the "prompt" entry in hooks/hooks.json and the one-line notes in skills/protocol and skills/refresh.
-
-Standard library only. Costs 0 model tokens unless it injects its one reminder line.
+Standard library only. Costs 0 model tokens unless it injects its one reminder line. Never blocks.
 """
 import json
-import math
 import os
 import re
-import tempfile
 import time
 
-DEFAULT_RUNGS = (15, 60, 120)     # seconds, in order; `inbox-ladder: off` disables
-INBOX_MAX_WAIT = 45               # the one number: no single harness_inbox call waits longer (D-ff4a4: 90 s died at 60)
-EXPECTING_KINDS = ("task", "question", "review")   # (a) only these sends start a ladder
 REMINDER = ("Inbox: harness_inbox did not run in your last reply. Call it now and answer any mail in this reply "
             "(D-9cc1f); do not ask the operator first.")
 UNATTENDED_PREFIXES = ("[scheduled]",)
-
-
-def parse_ladder(value):
-    """'15,60,120' -> (15, 60, 120); 'off' -> (); missing or unparseable -> the defaults."""
-    if value is None:
-        return DEFAULT_RUNGS
-    v = str(value).strip().strip("`").lower()
-    if v in ("off", "false", "no", "0"):
-        return ()
-    try:
-        r = tuple(int(x) for x in re.split(r"[,\s]+", v) if x)
-    except ValueError:
-        return DEFAULT_RUNGS
-    # 0.15.3 (P7): at most 8 rungs of at most 10 minutes each
-    return tuple(min(x, 600) for x in r[:8]) if r and all(x > 0 for x in r) else DEFAULT_RUNGS
-
-
-def max_wait(cfg=None):
-    try:
-        n = int((cfg or {}).get("inbox_max_wait") or INBOX_MAX_WAIT)
-    except (TypeError, ValueError):
-        n = INBOX_MAX_WAIT
-    return max(5, min(n, 60))        # Harness.inbox clamps a wait to 60 s anyway
-
-
-def rung_chunks(rung, mw):
-    """One rung as calls of at most mw seconds, equal as possible: 15 -> [15], 60 -> [30, 30], 120 -> [40, 40, 40]."""
-    n = max(1, math.ceil(rung / mw))
-    base, rem = divmod(rung, n)
-    return [base + (1 if i < rem else 0) for i in range(n)]
-
-
-def plan(rungs=DEFAULT_RUNGS, mw=INBOX_MAX_WAIT):
-    return [rung_chunks(r, mw) for r in rungs]
-
-
-def total_seconds(p):
-    return sum(sum(c) for c in p)
-
-
-def applies(kind):
-    """(a) a ladder follows harness_send kind task, question or review, never notice, result or message."""
-    return kind in EXPECTING_KINDS
 
 
 def is_unattended(prompt=None, model=None, env=None):
@@ -75,31 +24,7 @@ def is_unattended(prompt=None, model=None, env=None):
     return str(prompt or "").lstrip().startswith(UNATTENDED_PREFIXES)
 
 
-def ladder_hint(kind, msg_id, rungs, cfg=None, model=None, env=None):
-    """The block harness_send adds to its result for a send that expects an answer. None = no ladder."""
-    if not applies(kind) or not rungs or is_unattended(None, model, env):
-        return None
-    mw = max_wait(cfg)
-    p = plan(rungs, mw)
-    # 0.17.0 (R-055): one short instruction; `rungs` and `total_s` dropped from the reply (the waits say it)
-    return {"waits": [c for r in p for c in r], "max_wait": mw, "end": f"still waiting on {msg_id}",
-            "how": "harness_inbox wait=<n> per wait, stop at the first mail and answer it; all empty: end with `end`"}
-
-
-def run(inbox, p, msg_id):
-    """Drive the ladder with inbox(wait) -> {'count': n, ...}. Stops at the first mail. -> result dict."""
-    calls = waited = 0
-    for rung in p:
-        for w in rung:
-            r = inbox(w)
-            calls += 1
-            waited += w
-            if (r or {}).get("count"):
-                return {"mail": r, "calls": calls, "waited_s": waited, "end": None}
-    return {"mail": None, "calls": calls, "waited_s": waited, "end": f"still waiting on {msg_id}"}
-
-
-# ---- Stop hook: did harness_inbox run in this turn? (spec section 1.2) -------------------------------------------
+# ---- Stop hook: did harness_inbox run in this turn? -------------------------------------------
 
 def _text_of(content):
     if isinstance(content, str):

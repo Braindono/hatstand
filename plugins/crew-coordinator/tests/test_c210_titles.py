@@ -170,7 +170,9 @@ class Item7Nudge(Base):
         e = self.holder("envoy", "local_env2")
         c = self.holder("critic", "local_cri2")
         r = self.call("harness_send", agent=self.plain, to="%s,%s" % (e[:8], c[:8]), body="both", subject="s", kind="result")
-        self.assertEqual(r["nudge"]["do"].count("Do: SendMessage to local_"), 2)
+        do = r["nudge"]["do"]       # 0.26.0 (item 12): one SendMessage step names both ids; the text is given once
+        self.assertEqual(do.count("Do: SendMessage to"), 1)
+        self.assertTrue("local_env2" in do and "local_cri2" in do, do)
 
 
 if __name__ == "__main__":

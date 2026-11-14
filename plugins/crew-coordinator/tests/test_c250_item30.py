@@ -24,9 +24,9 @@ class Item30(C.Base):
         text = dig["text"] if isinstance(dig, dict) else str(dig)
         succ = self.h.state().role_holder("curator")
         self.assertNotEqual(succ, old)
-        self.assertRegex(text, r"12 owed; newest 5 shown")
+        self.assertRegex(text, r"\+7 more owed \(harness_admin op=owed lists every id\)")
         inbox = self.call("harness_inbox", agent=succ, peek=True)
-        self.assertRegex(inbox["text"], r"owed reply 12:")                       # the footer counts what the digest counts, not 8
+        self.assertRegex(inbox["text"], r"owed reply 12 \(operator first, then oldest first\):")                       # the footer counts what the digest counts, not 8
         self.assertEqual(inbox["owed_total"], 12)
         self.assertEqual(len(D.owed_replies(self.h.state(), succ)), 12)
         self.assertEqual(len(D.owed_replies(self.h.state(), succ, cap=8)), 8)    # a caller may still ask for a short list

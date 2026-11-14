@@ -2,114 +2,206 @@
 
 One question per change against the installed release. Answer every one; the gate fails on a blank answer.
 
-## Q-0d04cad2 doline: scripts/doorbell.py::wake_do#9683a5a5
-Do-line text changed in scripts/doorbell.py::wake_do (18 line(s)). Which sender acts on it, and what if that sender lacks the tool it names?
-Answer: The sender is the live relay holder (envoy first, item 28) that gets the verify or disable Do-line in its own harness tool result; it runs RemoteTrigger get or update and reports wake_verify or wake_disabled. A sender without RemoteTrigger skips it, as the line says (no tool here: skip it). The claim then times out after WAKE_CLAIM_S (5 min) and another relay holder may claim it. Nothing blocks; the routine stays pending or undisabled.
+## Q-238250e5 doline: scripts/harness.py::<module>#416d4c8f
+Do-line text changed in scripts/harness.py::<module> (1 line(s)). Which sender acts on it, and what if that sender lacks the tool it names?
+Answer: The changed text is the sync Changed-list overflow wording (CHANGED_CAP, '+N more (harness_sync full=true)' and the counted joins, role moves and threads, each naming full=true). The sender is the agent that called harness_sync itself, so it always has the tool the line names; there is no relay or other-tool step in it, and nothing breaks if the caller ignores the hint (it only sees fewer lines).
 
-## Q-d93e6a2b event: hook.onecmd
-Event type hook.onecmd added. Who reads it, and is docs/EVENTS.md current?
-Answer: hook.onecmd (agent, role, blocks, tokens, sha) is written by the Stop hook in observe mode for envoy, curator, ops-coder and steward. Readers: none in code; it is an audit event for the operator and critic (the first-week fail definition reads it). docs/EVENTS.md is current: its rows name hook.onecmd, nudge.alarm_closed and relay.closed (reasons read, trigger_dead, expired).
+## Q-b05a0d18 doline: scripts/harness.py::sync#2a132c79
+Do-line text changed in scripts/harness.py::sync (32 line(s)). Which sender acts on it, and what if that sender lacks the tool it names?
+Answer: The changed text is the Changed-list overflow line in sync (`+N more (harness_sync full=true)`), now computed after decision cards (new D- cards) and task lines are set aside as never cut; the sender that acts on it is the agent that called harness_sync itself, which by definition holds harness_sync. There is no relay or other-tool step: if the caller ignores the hint it only sees fewer peer lines (decision cards, task lines, operator and config lines are always shown), and nothing breaks.
 
-## Q-cf2a0411 event: nudge.alarm_closed
-Event type nudge.alarm_closed added. Who reads it, and is docs/EVENTS.md current?
-Answer: nudge.alarm_closed (msg_id, reason reply|read) is written by the alarm scan when the addressee replied on the thread or read the mail. Readers: alarm_scan and alarm_lines (a closed alarm no longer lists or re-fires); the nudge.alarm event itself is kept. docs/EVENTS.md is current: its rows name hook.onecmd, nudge.alarm_closed and relay.closed (reasons read, trigger_dead, expired).
+## Q-a95070d9 event: hook.barepath
+Event type hook.barepath added. Who reads it, and is docs/EVENTS.md current?
+Answer: hook.barepath (agent, role, paths, exts, sha) is written by the Stop hook in scripts/harness.py (check in scripts/barepath.py) when a final reply names a local .md, .pdf or .docx path and no SendUserFile or Artifact publish ran that turn. Readers: none in code; it is an audit event for the operator and critic, and carries counts, extensions and a hash, never the path. docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
 
-## Q-1f4482e1 event: scripts/doorbell.py::_close_dead#18118c6c
-store.append( call, or a function that holds one, changed in scripts/doorbell.py::_close_dead (18 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: _close_dead writes relay.closed {msg_id, reason trigger_dead} (new reason value, no new field) and one nudge.miss per message and recipient, both by system and once per message (precheck). Readers of relay.closed: _closed (msg_id only) and its four consumers, relay_expire and _dead_relay_mids, so a new reason is accepted; nudge.miss feeds the sender_silent skip and weekly_report.py. A system nudge.result is never written, so the sender's later report still counts. docs/EVENTS.md is current: its rows name hook.onecmd, nudge.alarm_closed and relay.closed (reasons read, trigger_dead, expired).
+## Q-218c5fab event: hook.virtue
+Event type hook.virtue added. Who reads it, and is docs/EVENTS.md current?
+Answer: hook.virtue (agent, role, sha, mailed, chars) is written by the new UserPromptSubmit hook (scripts/ctx_hook.py virtue) when a prompt contains the word virtue. Readers: none in code; the mail it sends goes to role:secretary as one notice from sender system with session, role, prompt sha and length and no prompt excerpt, so the event itself is an audit record for the operator. docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
 
-## Q-3be12b84 event: scripts/doorbell.py::claim_relay#f6e0b956
-store.append( call, or a function that holds one, changed in scripts/doorbell.py::claim_relay (3 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: claim_relay (3 lines) now closes a dead offer at claim time through _close_dead instead of claiming it: relay.closed trigger_dead plus nudge.miss (see Q-1f4482e1). No new field on the claim event. docs/EVENTS.md is current: its rows name hook.onecmd, nudge.alarm_closed and relay.closed (reasons read, trigger_dead, expired).
+## Q-a7b07401 event: owed.closed
+Event type owed.closed added. Who reads it, and is docs/EVENTS.md current?
+Answer: owed.closed (msg_id, key role:<r> or agent id, role, reason?) is written by Harness.owed_close (harness_admin op=owed_close) when a role dismisses an owed item addressed to it. Readers: State fold (st.owed_closed), then doorbell owed_replies, open_task, _closed_for in wake_scan and _wake_block, and _answered (returns 'closed'). docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
 
-## Q-fc9d3f3f event: scripts/doorbell.py::wake_do#9683a5a5
-store.append( call, or a function that holds one, changed in scripts/doorbell.py::wake_do (18 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: wake_do writes the existing wake.claim event with the same fields; only who may claim changed (envoy first while warm, item 28). No new field, no new event type. Reader: wake_do itself and the claim timeout check. docs/EVENTS.md is current: its rows name hook.onecmd, nudge.alarm_closed and relay.closed (reasons read, trigger_dead, expired).
+## Q-f9d2f53b event: result.measured
+Event type result.measured added. Who reads it, and is docs/EVENTS.md current?
+Answer: result.measured (tool, calls, bytes, max) is written by the MCP server through Harness.measure and measure_flush, one event per tool every 25 calls or 30 minutes and at server stop or reload, actor system. Readers: none in code; it exists for the next token audit to rank results by size without reading text. docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
 
-## Q-362974aa write: scripts/ctx_hook.py::relay_hook#4cc23f07
-File write changed in scripts/ctx_hook.py::relay_hook (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
-Answer: relay_hook (1 line) now returns None and writes no file; the relay Do-line comes only from the claiming holder's own harness tool result (item 23). Nothing is written, so there is no local data to clash with.
+## Q-195a35ec event: scripts/ctx_hook.py::virtue_check#a8ee9289
+store.append( call, or a function that holds one, changed in scripts/ctx_hook.py::virtue_check (41 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: virtue_check still writes the same hook.virtue event (agent, role, sha, mailed, chars) and one notice to role:secretary from sender system; round 3 only extends the mail text with the step the secretary can take (ask the operator in its own chat whether he named a virtue; record it as a design imperative or drop the notice) and still carries no prompt text. Readers: the secretary's inbox for the mail, none in code for the event; docs/EVENTS.md is current (the hook.virtue row names the step; no field change).
 
-## Q-0686291d write: scripts/harness.py::hook#efb4e23d
-File write changed in scripts/harness.py::hook (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
-Answer: The Stop hook writes one marker file harness-onecmd-<first 8 of agent id> (mode 0600) in the hook state dir (HARNESS_STATE_DIR, default ~/.claude/crew-coordinator/state, mode 0700), holding the last message digest so one message warns once. The file is the package's own per-agent marker; if a file of that name already exists its content is read as a digest and overwritten, and an unreadable or foreign one only causes a repeated warning (errors are swallowed, the hook never blocks).
+## Q-a8b487a2 event: scripts/doorbell.py::_attach#5725e4ae
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::_attach (18 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: _attach (18 lines) changes only which sends get a relay or a ring: a result or handoff reply rings, relays and rewakes like an ask when the recipient asked on that thread or its role has a verified wake routine; the events it writes (nudge.offered, nudge.relay_offer, nudge.rewake) keep their fields. No new field or event type; readers are the sender's own tool result and the wake scan. docs/EVENTS.md needs no change.
 
-## Q-f8ea5a37 event: hook.askgate
-Event type hook.askgate added. Who reads it, and is docs/EVENTS.md current?
-Answer: hook.askgate (agent, role, verdict allow|would_block|block, tokens, section) is written by scripts/ask_gate.py on every evaluated operator question. Readers: none in code; it is the audit event for the observe week (rates by role); counts and a verdict only, never the question text. docs/EVENTS.md is current (it lists it).
+## Q-115b4487 event: scripts/doorbell.py::_request_relay#43e524b7
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::_request_relay (4 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: _request_relay writes nudge.relay_offer with unchanged fields; the 4 changed lines only keep it from refusing "one ring per recipient session" when the earlier delivered/woke nudge.result carries a to_session of another recipient (single-recipient offers). Readers: relay holders via claim_relay and the relay expiry/alarm scans; docs/EVENTS.md is current (the nudge.result round 3 row says one relay is offered per message).
 
-## Q-6559dc0b event: hook.idcheck
-Event type hook.idcheck added. Who reads it, and is docs/EVENTS.md current?
-Answer: hook.idcheck (agent, role, id, verdict, tokens) is written by the PostToolUse hook after harness_send and harness_record for every cited corpus id. Readers: none in code; the audit event for the observe week (unknown and superseded rates). docs/EVENTS.md is current (it lists it).
+## Q-41f127e6 event: scripts/doorbell.py::alarm_scan#0a95243d
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::alarm_scan (2 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: alarm_scan writes nudge.alarm, nudge.alarm_armed and nudge.alarm_closed with unchanged fields; the 2 changed lines read results through _drop_partial, so one recipient's per-recipient nudge.result (to_session) no longer counts as the whole send being reported until every recipient session has reported. Readers of the alarm events are unchanged (the envoy sync line and mail). docs/EVENTS.md is current (nudge.result round 4 row names the alarm reader); NOT VERIFIED: I did not run the scan with a two-recipient send.
 
-## Q-5460c863 event: scripts/ask_gate.py::log_event#ffba85de
-store.append( call, or a function that holds one, changed in scripts/ask_gate.py::log_event (9 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: log_event writes the new hook.askgate event (see Q-f8ea5a37); no other event or field changes. It never raises and writes only when an agent id is known. docs/EVENTS.md is current (it lists it).
+## Q-2ca5fbdc event: scripts/doorbell.py::claim_relay#762c6f87
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::claim_relay (4 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: claim_relay writes nudge.relay_claim and nudge.relay_released with unchanged fields; its two precheck loops now stop a claim or release only on a nudge.result that closes this offer (_closes: a whole-message result, or one whose to_session is this offer's recipient), so another recipient's report no longer blocks the claim. Readers: the relay holders and the relay scans; docs/EVENTS.md is current (nudge.result round 4 row: a recipient's result closes only its own relay offer).
 
-## Q-f30bf818 event: scripts/doorbell.py::relay_expire#8af8b9d6
-store.append( call, or a function that holds one, changed in scripts/doorbell.py::relay_expire (18 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: relay_expire now writes nudge.miss (reason relay_expired) plus relay.closed (reason expired) instead of a system nudge.result. relay.closed readers: _closed (msg_id only) and its four consumers, relay_expire and _dead_relay_mids, so a new reason is accepted; nudge.miss feeds the sender_silent skip and weekly_report.py; the alarm scan reads unread state, not the result (stated in the CHANGELOG, item 34). docs/EVENTS.md is current (it lists it).
+## Q-a2a5dcf4 event: scripts/doorbell.py::record_result#96481a7c
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::record_result (27 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: record_result writes nudge.result with no new field in round 4 (to_session is the round-3 field); the changes are that a per-recipient report leaves the send pending (_pop_pending is skipped until every recipient session has reported) and the readers drop partial results through _drop_partial, so the unreported, expiry, alarm and wake-block scans (_first_results, _results, alarm_scan) do not take one recipient's result for the whole send. docs/EVENTS.md is current (nudge.result round 4 row). NOT VERIFIED: the reader at doorbell.py line 670 and the nudge.rewake/relay close readers at 1780-1900 were not all traced for use of the filtered results.
 
-## Q-fe3d16dc event: scripts/harness.py::inbox#05ee5225
-store.append( call, or a function that holds one, changed in scripts/harness.py::inbox (2 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: inbox (2 lines) only switches to the shared unread function (item 30); the events it appends (read markers) keep their fields. No new field or event type. docs/EVENTS.md needs no change.
+## Q-6c684c9c event: scripts/doorbell.py::relay_expire#f3454527
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::relay_expire (5 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: relay_expire writes relay.closed {msg_id, reason read|expired} with unchanged fields; its duplicate check now treats a nudge.result as closing the offer only when it is a whole-message result or carries this offer's to_session, so another recipient's report no longer stops the expiry of an unanswered offer. Readers: claim_relay and the relay view, the weekly report; docs/EVENTS.md is current (relay.closed row plus the nudge.result round 4 text on expiry).
 
-## Q-d3641ae9 event: scripts/harness.py::register#e5432027
-store.append( call, or a function that holds one, changed in scripts/harness.py::register (10 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: register (10 lines) now writes agent.superseded {id, successor} for the chat's idle hook-made id when a role agent registers (item 31); same event type and payload as the compaction lineage use since 0.14. Reader: the State fold (lineage, status). docs/EVENTS.md already lists agent.superseded.
+## Q-0cfd0bbe event: scripts/harness.py::_measure_write#7f4fbb8b
+store.append( call, or a function that holds one, changed in scripts/harness.py::_measure_write (4 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: _measure_write writes the new result.measured event (see Q-f9d2f53b), popping the in-memory counter for one tool. Readers: none in code, the next audit. docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
 
-## Q-25656e30 event: scripts/harness.py::restore#111830bb
-store.append( call, or a function that holds one, changed in scripts/harness.py::restore (14 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: restore (14 lines) changes the auto_confirm check (item 29: gates from the ledger, a per-role lock and a holder re-check at registration) and shares item 31's idle-id supersede. It appends the same events as before (agent.registered, agent.superseded, capsule status versions); no new field or type. docs/EVENTS.md needs no change.
+## Q-2be7ebab event: scripts/harness.py::_read_by_reply#ecd2b7f1
+store.append( call, or a function that holds one, changed in scripts/harness.py::_read_by_reply (18 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: _read_by_reply writes message.read {ids, via: 'reply_to'} for the addressee when its reply_to names a mail it was addressed to and had not read; the new via field is optional. Readers: State fold (read_by), inbox, owed and wake scans, wake.measure and relay.closed through measure_reads and close_relays. docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
 
-## Q-df82b55f event: scripts/harness.py::restore_digest#8fce41f3
-store.append( call, or a function that holds one, changed in scripts/harness.py::restore_digest (15 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: restore_digest (15 lines) reads the shared unread and owed functions (item 30) so the digest, banner and inbox agree; it appends nothing new (the changed line count is reading code). No new field or event type.
+## Q-5c032696 event: scripts/harness.py::_recall_marks_read#a9b2cdef
+store.append( call, or a function that holds one, changed in scripts/harness.py::_recall_marks_read (17 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: _recall_marks_read is new and writes message.read {ids, via: "recall"} for an addressee (lineage, group or role) who recalls an m- id they had not read; it never raises and is called from recall after event cards. Readers: State fold (read_by), inbox, owed and wake scans, measure_reads and close_relays. docs/EVENTS.md is current: the message.read row now names via "recall"; this is also what clears a cut inbox mail.
+
+## Q-fb8faeee event: scripts/harness.py::_send#7f44faed
+store.append( call, or a function that holds one, changed in scripts/harness.py::_send (16 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: _send (16 lines) drops the old ladder hint from the send result and, when reply_to is set, calls _read_by_reply (message.read via reply_to) plus measure_reads and close_relays, so existing wake.measure and relay.closed events can follow. message.sent keeps its fields. docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
+
+## Q-0832b384 event: scripts/harness.py::hook#51ed6083
+store.append( call, or a function that holds one, changed in scripts/harness.py::hook (40 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: hook (40 lines) now appends the new hook.barepath event from the Stop hook (once per message, marker file per agent), switches the reminder to inbox_reminder, and adds the compaction-successor state block to the SessionStart output. Readers of hook.barepath: none in code (audit). docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
+
+## Q-f09388fd event: scripts/harness.py::inbox#e6cc6264
+store.append( call, or a function that holds one, changed in scripts/harness.py::inbox (25 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: inbox still writes message.read {ids} with no new field; round 4 only changes which ids go in: a cut mail (over 1,000 characters, not task/question/review/handoff/expects_reply/operator) is left unread, except at its second listing when its recipient has no ask waiting on it (via _cut_listed), when it is marked read with the pointer kept. Readers: State fold read_by, owed and wake scans, measure_reads and close_relays (which get only the read ids). docs/EVENTS.md is current for the recall rule (message.read row, round 4: a truncated recall marks nothing read; budget= raises the cut); the second-listing read is not described in EVENTS.md, which is fine as no event field changed.
+
+## Q-2fad1771 event: scripts/harness.py::owed_close#2de3c351
+store.append( call, or a function that holds one, changed in scripts/harness.py::owed_close (34 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: owed_close (harness_admin op=owed_close) still writes owed.closed {msg_id, key, role, reason?} only for items addressed to the caller; mail whose sender is in OPERATOR ("human", "operator"), his tasks included, is now skipped and returned as `refused_operator_mail` with a reason, with no event written. Readers: State fold owed_closed, then owed_replies, open_task, wake scans and _answered; docs/EVENTS.md is current (owed.closed row, round 3 refusal sentence).
+
+## Q-ca4c10fe event: scripts/harness.py::publish_release#bf4f6d28
+store.append( call, or a function that holds one, changed in scripts/harness.py::publish_release (14 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: publish_release (14 lines) adds an optional hotfix field to release.published (the RD id) when --hotfix waived the cadence check, and the notes gain 'cadence waived by RD-id'; with --operator-override it now prints a warning that --hotfix was ignored (no event change). Reader: the State fold hotfix_used (a defect is used once). docs/EVENTS.md is current: the release.published row lists the optional hotfix field.
+
+## Q-ff748044 event: scripts/harness.py::restore_digest#5544147f
+store.append( call, or a function that holds one, changed in scripts/harness.py::restore_digest (9 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: restore_digest (9 lines): the 'Owes reply' section lists operator asks first, then oldest first, each with its age, at most 5 lines plus '+N more owed (harness_admin op=thread)', and prints one WARN line when the inbox-ladder preference is present and ignored. The events it appends (read markers for shown mail) keep their fields. docs/EVENTS.md needs no change.
+
+## Q-9403298c event: scripts/harness.py::sync#2a132c79
+store.append( call, or a function that holds one, changed in scripts/harness.py::sync (32 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: The only store.append in sync is the unchanged agent.machine event; the 32 changed lines concern the Changed list (decision cards and task lines kept out of the cap, the fence counted as two lines, +N more line), so no event or payload changed. No reader impact; docs/EVENTS.md needs no change.
+
+## Q-fae30826 event: scripts/mcp_server.py::main#cddbbb3d
+store.append( call, or a function that holds one, changed in scripts/mcp_server.py::main (1 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: main (1 line) calls h.measure_flush() before server.stopped, so pending result.measured counters are written at server stop. Readers: none in code (audit). docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
+
+## Q-5744544a event: scripts/mcp_server.py::reexec#cddbbb3d
+store.append( call, or a function that holds one, changed in scripts/mcp_server.py::reexec (1 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: reexec (1 line) calls h.measure_flush() before the server.stopped event (reason reload), so result.measured counters are not lost on a reload. Readers: none in code (audit). docs/EVENTS.md is current: it has new rows for message.read (via), owed.closed, result.measured, hook.virtue and hook.barepath.
 
 ## Q-e8a35681 gate: hooks/hooks.json
 Gate file changed: hooks/hooks.json. How does the installed simulator still catch a bad tree with this change?
-Answer: The installed simulator still catches a bad tree: the release sim's own checks (setup, I1 to I9) ran against this tree and pass, including I7 once the scope names hooks/hooks.json (items 18 and 32 now name it); the guard test test_guard_hooks_json_unchanged was re-pinned on purpose (the CHANGELOG names the four added entries); no gate function or sim file is edited by this release.
+Answer: hooks/hooks.json gains exactly one entry: a UserPromptSubmit command running ctx_hook.py virtue (timeout 10); no other hook is touched. The installed simulator still catches a bad tree through its own checks run on the scratch copy (setup, I1 to I9, including I7 with hooks/hooks.json allowed because the CHANGELOG names it as a gate file) and because test_guard_hooks_json_unchanged was re-pinned on purpose to sha 7494dbe76fd2; release_sim.py and the other sim files are not in the diff.
 
-## Q-29a6e625 hook: PostToolUse::mcp__.*harness_(send|record)$::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/harness.py" hook idcheck
-Hook changed: PostToolUse matcher 'mcp__.*harness_(send|record)$'. Which tool calls does it now see, and what if it fails?
-Answer: PostToolUse after harness_send or harness_record (matcher mcp__.*harness_(send|record)$) runs scripts/harness.py hook idcheck. It sees only those two tool calls of the harness server, reads the cited ids in the sent or recorded text, prints at most one line under 40 tokens and logs hook.idcheck. If it fails the exception is swallowed: the hook prints nothing, never blocks, and the send or record has already happened.
+## Q-110bb1ae gate: scripts/harness.py::publish_release
+Gate function changed: scripts/harness.py::publish_release. How does the installed simulator still catch a bad tree?
+Answer: The change adds a hotfix argument: _check_hotfix runs first and refuses (HarnessError) a flag that is not a recorded S1 or S2 defect of this plugin that names the published version and is unused; it waives only _check_release_cadence, while _check_accept_gate and _check_release_scope still run before it, and --operator-override ignores it. The installed simulator is unchanged (release_sim.py is not in the diff) and still runs the candidate's publish on a scratch copy of the ledger (I1 and I2 hash before and after, I7 with scripts/harness.py named as a gate file in the CHANGELOG); a bad hotfix path is refused with nothing written.
 
-## Q-b2977a02 hook: PreToolUse::AskUserQuestion|mcp__.*AskUserQuestion|SendUserMessage|mcp__.*SendUserMessage|mcp__.*harness_send::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ask_gate.py" pre
-Hook changed: PreToolUse matcher 'AskUserQuestion|mcp__.*AskUserQuestion|SendUserMessage|mcp__.*SendUserMessage|mcp__.*harness_send'. Which tool calls does it now see, and what if it fails?
-Answer: PreToolUse (matcher AskUserQuestion, SendUserMessage and harness_send, with the mcp__ prefixes) runs ask_gate.py pre. It sees operator-facing questions: AskUserQuestion, SendUserMessage, and harness_send to the operator (it exits first on a harness_send not to the operator and on text without a question mark). In 0.25.0 it is observe-only: it logs hook.askgate and never denies. On failure (missing or bad gates.json, error) it allows, writes to stderr and does not block.
+## Q-420b1ec7 hook: UserPromptSubmit::::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ctx_hook.py" virtue
+Hook changed: UserPromptSubmit matcher ''. Which tool calls does it now see, and what if it fails?
+Answer: It sees every UserPromptSubmit event (matcher ''), not tool calls: a command running ctx_hook.py virtue that acts only when the prompt contains virtue(s). Scheduled runs, notification wrappers and cross-session messages are skipped, and it is once per distinct prompt per session. On any failure it logs through _log, prints nothing and exits 0, so the prompt is never blocked; at worst no secretary notice or hook.virtue is written.
 
-## Q-3b6617b1 hook: SessionStart::startup|resume|clear|compact::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ask_gate.py" session
-Hook changed: SessionStart matcher 'startup|resume|clear|compact'. Which tool calls does it now see, and what if it fails?
-Answer: SessionStart (startup, resume, clear, compact) runs ask_gate.py session, which in 0.25.0 injects nothing into harness chats (the facts index is not injected; item 32). It sees only the session start event. If it fails it prints nothing and the session starts normally (timeout 10 s).
+## Q-d986ae7d write: scripts/harness.py::_cut_listed#f9acbfed
+File write changed in scripts/harness.py::_cut_listed (3 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It writes `<home>/_harness/nudge_state/cut_listed_<agent id, first 64 chars>.json` (store.dir is home/_harness; the folder is the runtime state folder listed in release_guard RUNTIME_PREFIXES, not the plugin package), a JSON map of cut mail id to listing count, via a temp file `<path>.<pid>.tmp` and os.replace, at most 300 entries. An existing file is read and overwritten with the updated counts; if it holds invalid JSON or a non-dict, it is treated as empty and replaced; if it cannot be read or written, the exception is swallowed and the mail is simply not aged (stays unread until recalled), with no ledger event and no data lost beyond that file. It is written on every inbox listing that contains a cut mail (mark_read on), also for mail that is not yet aged. NOT VERIFIED: a leftover .tmp file is not cleaned when os.replace fails.
 
-## Q-19528d68 hook: Stop::::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ask_gate.py" stop
-Hook changed: Stop matcher ''. Which tool calls does it now see, and what if it fails?
-Answer: Stop (every Stop event) runs ask_gate.py stop. It sees the final assistant message of the chat (transcript read capped at 400 kB), checks it for an operator question, is observe-only (logs hook.askgate, never blocks) and honours stop_hook_active. If it fails or times out (10 s) the Stop completes normally; the existing Stop hook (restore slot, one-command check) is separate and unaffected.
+## Q-6f4878c7 write: scripts/harness.py::hook#97adc474
+File write changed in scripts/harness.py::hook (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: The Stop hook writes the marker file harness-barepath-<first 8 of agent id> in the hook state dir (HARNESS_STATE_DIR, default ~/.claude/crew-coordinator/state, mode 0700), holding the reply sha so one message logs one event, via _atomic_write (mkstemp plus os.replace, mode 0600). A file already at that path is replaced; if it held something foreign it is read as a digest, so at worst the event is logged once more, and errors are swallowed (the hook never blocks).
 
-## Q-774b691f event: hook.observe_ended
-Event type hook.observe_ended added. Who reads it, and is docs/EVENTS.md current?
-Answer: hook.observe_ended (hook askgate|idcheck, until) is written at most once a day per hook by ask_gate.py and the id check after their observe_until date. Readers: none in code; it is the audit event telling the operator the observe period is over so the date gets renewed or the mode switched. docs/EVENTS.md is current (its hook.observe_ended row is there).
+## Q-3e0c324d write: scripts/inbox_ladder.py::_write_flag#1b8fdfb7
+File write changed in scripts/inbox_ladder.py::_write_flag (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: inbox_ladder.py is deleted in 0.26.0 and its code moved to scripts/inbox_reminder.py (same behaviour, not new); see Q-a8c3dea5. Nothing in the removed file writes any more.
 
-## Q-d2217e5a event: scripts/doorbell.py::_attach#516922a9
-store.append( call, or a function that holds one, changed in scripts/doorbell.py::_attach (2 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: _attach (2 lines) only treats a mail from the named system sender like one from the operator for the nudge attach: no nudge is attached to it. No new field or event type; the events it appends are unchanged. docs/EVENTS.md needs no change.
+## Q-ad381b9e write: scripts/inbox_ladder.py::state_dir#ed200c35
+File write changed in scripts/inbox_ladder.py::state_dir (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: inbox_ladder.py is deleted in 0.26.0 and state_dir moved unchanged to scripts/inbox_reminder.py (same HARNESS_STATE_DIR or ~/.claude/crew-coordinator/state, 0700); see Q-dfebec39. The old file writes nothing now.
 
-## Q-14234eb1 event: scripts/doorbell.py::alarm_scan#b6bc8fcb
-store.append( call, or a function that holds one, changed in scripts/doorbell.py::alarm_scan (22 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: alarm_scan now sends its nudge.alarm notice to role:envoy as the named sender "system" instead of "operator" (item 39); the mail event keeps its fields, only the from value is the new constant, and the notice is never nudged, owed or id-checked. No new event type. Readers of the mail: the envoy's inbox. docs/EVENTS.md needs no change (a sender value, not a field).
+## Q-75bfb166 write: scripts/inbox_ladder.py::take_reminder#f1d165f4
+File write changed in scripts/inbox_ladder.py::take_reminder (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: inbox_ladder.py is deleted in 0.26.0 and take_reminder moved unchanged to scripts/inbox_reminder.py; see Q-afd9c04f. The old file writes nothing now.
 
-## Q-2af39f70 event: scripts/harness.py::_send#eeb92451
-store.append( call, or a function that holds one, changed in scripts/harness.py::_send (2 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: _send (2 lines) accepts the sender "system" without a roster agent and writes the message event with from "system"; same event, same fields. Readers: the State fold and inbox as for any message; the system sender is skipped by owed_replies, the nudge and the id check. docs/EVENTS.md needs no change.
+## Q-a8c3dea5 write: scripts/inbox_reminder.py::_write_flag#e509e1d3
+File write changed in scripts/inbox_reminder.py::_write_flag (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: _write_flag writes harness-inbox-reminder-<session id> in the state dir (HARNESS_STATE_DIR, default ~/.claude/crew-coordinator/state), created O_EXCL, O_NOFOLLOW, mode 0600; moved unchanged from inbox_ladder. If a regular file already exists there it is unlinked and replaced; a symlink there is refused (OSError, caught) and no reminder is queued.
 
-## Q-0ba44a7e event: scripts/harness.py::hook#dc7e9865
-store.append( call, or a function that holds one, changed in scripts/harness.py::hook (60 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: harness.py hook (60 lines) in this release writes hook.idcheck and hook.onecmd (new events, rows present), session.bound and agent.resumed (existing, unchanged payloads), and now hook.observe_ended for the id check via idcheck.ended_once (see Q-774b691f). Readers: the State fold for the existing two; the new ones are audit events. docs/EVENTS.md is current (its hook.observe_ended row is there).
+## Q-dfebec39 write: scripts/inbox_reminder.py::state_dir#4f984e42
+File write changed in scripts/inbox_reminder.py::state_dir (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: state_dir creates and chmods to 0700 the directory HARNESS_STATE_DIR or ~/.claude/crew-coordinator/state (moved unchanged from inbox_ladder). An existing directory is kept as is, only its mode is set to 0700 when owned by the user; files inside are not touched, and OSError is swallowed.
 
-## Q-648c5ce5 event: scripts/idcheck.py::ended_once#fbd25f2b
-store.append( call, or a function that holds one, changed in scripts/idcheck.py::ended_once (19 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
-Answer: ended_once writes hook.observe_ended {hook, until} once per day per hook (see Q-774b691f) and nothing else. Readers: none in code (audit). docs/EVENTS.md is current (its hook.observe_ended row is there).
+## Q-afd9c04f write: scripts/inbox_reminder.py::take_reminder#0beb1dfd
+File write changed in scripts/inbox_reminder.py::take_reminder (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: take_reminder reads the flag harness-inbox-reminder-<session id> in the state dir and unlinks it once to return the one reminder line (moved unchanged from inbox_ladder). It writes nothing; a symlink or missing file returns None, and the unlink only removes the package's own flag name.
 
-## Q-5e36e611 write: scripts/idcheck.py::ended_once#ce175923
-File write changed in scripts/idcheck.py::ended_once (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
-Answer: ended_once writes one marker file observe_ended_<hook> (hook askgate or idcheck) in the ledger store's own folder, holding the date of the last event, so the event is written once a day. The marker is written FIRST and the event only if that write succeeded, so an unwritable marker means no event at all, never a repeat on every call. Only the package writes that name; if a file of that name exists its date is read and overwritten (foreign content only causes one extra event); a write error is swallowed and the hook stays silent.
+## Q-b409722b event: scripts/doorbell.py::_attach#9fdf66ff
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::_attach (55 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: _attach keeps the fields of the events it writes (nudge.offered, nudge.relay_offer, nudge.rewake, nudge.skipped, nudge.miss) but adds new reason texts: nudge.miss reasons retired_no_successor (covered mail to a retired chat's id), no_route (a recipient nothing can reach), handed_off (covered mail to the id of a chat that handed off and is not restored yet; the send result says it is queued) and doorbell_error (the doorbell failed while handling a send, one miss per covered recipient, best effort), plus the relay offer reason route_closed and the skipped texts "no route: ..." and "id route closed by a stale mark". Readers: the sender's tool result, the alarm scan (HELD_REASONS reads nudge.skipped), wake_scan and weekly_report (nudge.miss), claim_relay and the relay scans (nudge.relay_offer). docs/EVENTS.md is current (nudge.miss row updated at 956c7a0 and 4b25548, re-pinned).
+
+## Q-6408195b event: scripts/doorbell.py::_request_relay#0d0893e4
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::_request_relay (4 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: _request_relay writes nudge.relay_offer with unchanged fields; the changed lines make its "already reported" refusal compare only against the same recipient's own to_session key (offer._key, set when the report is per recipient), so another recipient's or a whole-message delivery no longer blocks a missing recipient's relay. Readers: claim_relay and the relay scans. docs/EVENTS.md is current: the nudge.result round 3 row says a refused recipient's skip still asks for its relay after another's delivery and that a recipient's result closes only its own relay offer.
+
+## Q-cb39ac1a event: scripts/doorbell.py::claim_relay#b6a45c24
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::claim_relay (4 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: claim_relay writes nudge.relay_claim and nudge.relay_released with unchanged fields; its two "already reported" prechecks now call _closes with the offer's to_session and to, so only a nudge.result for that recipient's key (session id, or agent-id prefix) stops its claim, not another recipient's result. Readers: relay holders and the relay scans. docs/EVENTS.md is current: the nudge.result round 3 row (to_session, a recipient's result closes only its own relay offer).
+
+## Q-ed1c6499 event: scripts/doorbell.py::record_result#47cfdcd5
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::record_result (38 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: record_result writes nudge.result with a new optional to_session (the recipient's session id, or the first 8 characters of its agent id), from the new `to` argument; the result is unique per (message, recipient), a whole-message skipped report after some per-recipient ones is redirected to the first recipient not yet covered, and a per-recipient report leaves the send pending until all have reported. It also now asks for a relay on a skipped app_cap or no_remotetrigger for every nudge kind, result and handoff included (RELAY_ASK_RING). Readers: the unreported, expiry, alarm and wake-block scans via _drop_partial and _rkeys, the relay scans, and the State fold. docs/EVENTS.md is current (updated at 956c7a0): the item 5 row no longer says handoff and result keep their rules, and the whole-report redirect is documented.
+
+## Q-17f922ec event: scripts/doorbell.py::relay_expire#64218bb1
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::relay_expire (5 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: relay_expire writes relay.closed {msg_id, reason} and nudge.miss (relay_expired) with unchanged fields; its duplicate check now takes the offer's to_session and to, so another recipient's nudge.result no longer counts as already closing this offer (a relay.closed still does). Readers: claim_relay, the relay view and the weekly report. docs/EVENTS.md is current: the relay.closed row and the nudge.result round 3 text ("a recipient's result closes only its own relay offer").
+
+## Q-afe567b5 event: scripts/harness.py::hook#ab662d79
+store.append( call, or a function that holds one, changed in scripts/harness.py::hook (41 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: The only event the changed hook appends is hook.barepath {agent, role, paths, exts, sha}, which the installed 0.25.0 does not write at all; the Stop hook writes it when a final reply names a local .md, .pdf or .docx path and no file was sent or artifact published, at most once per session (agent) per day. The other changes (compaction-successor state text, inbox_reminder replacing inbox_ladder) append no event. Readers: none in code (audit event for the operator and critic). docs/EVENTS.md is current: the hook.barepath row has the fields and the once-per-session-per-day rule.
+
+## Q-4fa9ff74 event: scripts/harness.py::inbox#cd2de7bc
+store.append( call, or a function that holds one, changed in scripts/harness.py::inbox (75 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: inbox still writes message.read {ids} with no new field, but now only for mail shown whole within the output limit (a new full argument raises it); mail past the limit stays unread and is returned in a new not_shown field of the tool result (not an event), and a cut mail stays unread until recalled whole, except one listed a second time with no waiting recipient or whose waiting asker has already answered, which is marked read. Readers of message.read: the State fold (read_by), the owed and wake scans, measure_reads and close_relays. docs/EVENTS.md is current for the event (message.read row, via recall covers the cut mail); not_shown is a result field and not documented there, which is correct for an events file.
+
+## Q-2f44a84d event: scripts/harness.py::restore_digest#a5b37a5b
+store.append( call, or a function that holds one, changed in scripts/harness.py::restore_digest (11 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: The 11 changed lines only reorder the "Owes reply" section (owed_order, oldest first, each with its age via owed_age, at most OWED_LINES shown and a "+N more owed (harness_admin op=owed lists every id)" line); the message.read append for shown unread mail is unchanged, so no event or field changed. Readers of that message.read are the same as before (State fold read_by, owed and wake scans, measure_reads, close_relays). docs/EVENTS.md needs no change and is current for message.read.
+
+## Q-5c0858e0 write: scripts/harness.py::hook#5cb5f093
+File write changed in scripts/harness.py::hook (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: The Stop hook writes the bare-path marker harness-barepath-<first 8 characters of the agent id> in the hook state dir ($HARNESS_STATE_DIR or ~/.claude/crew-coordinator/state, created 0700), mode 0600, through h._atomic_write (mkstemp in the same folder, fsync, os.replace), with today's date (YYYY-MM-DD) as content; the installed 0.25.0 writes no such file. It reads the file first and writes only when its content is not today's date, so an existing file (including one the package does not own, or an older date) is replaced whole without any ownership check, and a same-day file is left alone and no event is written. A write error is swallowed by the hook's try/except and, because the write comes before the hook.barepath append, no event is written for that run (read from code, not run).
+
+## Q-dfa9fde4 doline: scripts/doorbell.py::rewake_relay_line#b3be313c
+Answer: The change adds the `rewake: "extra"` branch (a relay for one more recipient of a send whose sender never reported). The line is returned only by claim_relay (the single caller), so the actor is the live local relay-role holder (default envoy, curator, ops-coder, harness-critic, design-coder; never the steward) that just claimed the offer, not the original sender. Its text is "SendMessage to <to_session>: Mail <id> from <role>, thread <t>. Run harness_inbox." or, with no session id, RemoteTrigger run with no body; both end "No report is needed". A holder with no SendMessage has no report-skipped path here (that exists only in the reported relay line, which asks for outcome delivered|held|refused_by_app); the RemoteTrigger form says "No RemoteTrigger tool here: skip it". Nothing is written, the mail waits, and at the 65 min relay TTL relay_expire closes the offer for that recipient (relay.closed expired plus a nudge.miss relay_expired), so the failure shows in the ledger.
+
+## Q-67f32d5d event: scripts/doorbell.py::_attach#f04a6700
+Answer: _attach's own event appends (nudge.offered, nudge.skipped, nudge.idwake) are unchanged; the change is that each `nudge_mail_only` entry in the send result gains a `key` (the recipient id), which attach_nudge's new _render_outcomes/_outcomes uses to build the new `nudge_outcomes` result field. That field is a send-result field, not a ledger event; the readers of the events it is built from are _outcomes, wake_scan, alarm_scan and weekly_report. docs/EVENTS.md is current for the events (nudge.offered, nudge.skipped unchanged), but it does not mention `nudge_outcomes` or the mail-only `key`; they are documented in docs/delivery-invariants.md item 7 instead (grep of EVENTS.md for "nudge_outcomes" finds nothing).
+
+## Q-e1f00b14 event: scripts/doorbell.py::_close_dead#f808246b
+Answer: relay.closed (reason trigger_dead) gains the optional `to` (the offer's recipient), and its once-precheck now matches on (message, recipient) or a legacy close without `to`. Readers: _closed (whole-message closes, those without `to`), _closed_pairs (closes with `to`), relay_expire, claim_relay, _close_dead's own precheck, the trigger_dead check near line 2815, and relay_notice_lines. docs/EVENTS.md is current: the `relay.closed` row lists `to?`, reason trigger_dead, and says a close without `to` (pre-0.26.0) covers the whole message.
+
+## Q-8fcad4cd event: scripts/doorbell.py::_request_relay#cbdd02f2
+Answer: nudge.relay_offer gets a new variant: when a message already has an offer for another recipient, this recipient gets its own offer with key `<msg>#x<agent8>`, `rewake: "extra"`, reason sender_silent and fields msg_id, to, to_session, trigger, from, role, to_role, thread; "already" is now judged per (message, recipient). Readers: _relay_view, wake_scan (relayed_p), claim_relay, relay_expire (now treats rewake "extra" as a reportless offer), _outcomes and relay_notice_lines. docs/EVENTS.md is current: the nudge.relay_offer (changed, item 5) row names the key form, `rewake: "extra"`, reason and "no report needed", and the item 5 fix 1 row lists key, rewake, trigger, to_role.
+
+## Q-d02651f2 event: scripts/doorbell.py::alarm_scan#f9a1afda
+Answer: nudge.alarm_closed gains the optional `to`, and the alarm de-duplication and close checks are now per (message, recipient), with a close lacking `to` still closing every recipient's alarm of that message. Readers: alarm_scan (alarmed, a_closed) and alarm_lines (shut); weekly_report only counts nudge.miss. docs/EVENTS.md is current (the nudge.alarm_closed row is updated; the nudge.alarm row now says one per message and recipient, fixed at 16b4626).
+
+## Q-d5c7c13e event: scripts/doorbell.py::claim_relay#0403e12f
+Answer: No event shape changed here: nudge.relay_claim, nudge.relay_released and nudge.trigwake are written with the same fields; the change is that claim_relay now reads _closed_pairs and skips an offer already closed for that recipient, and can claim `extra` offers. Readers of the claim are _relay_view, _capped, relay_notice_lines, live_claim_line and the report path. docs/EVENTS.md is current: the nudge.relay_claim rows give msg_id, by, to_session, key, and the extra/rewake offer behaviour is in the nudge.relay_offer rows.
+
+## Q-b5cbae9e event: scripts/doorbell.py::close_relays#e695814b
+Answer: relay.closed (reason read) now carries `to`, the recipient who read, so a read closes only that recipient's offer rather than the whole message. Readers: _closed_pairs and _done (used by claim_relay and relay_expire), the once-prechecks of relay_expire and _close_dead, and relay_notice_lines; _closed ignores closes that have `to`. docs/EVENTS.md is current: the `relay.closed` row states `to?` and that the close covers that recipient only.
+
+## Q-5cb5398f event: scripts/doorbell.py::relay_expire#2dbc14a2
+Answer: relay.closed (reason read or expired) now carries `to`; the nudge.miss relay_expired write is unchanged, and the already-closed test and the done-set are per (message, recipient) via _closed_pairs, with `extra` offers also expired. Readers: _closed_pairs, _done in claim_relay and relay_expire, the _once precheck, relay_notice_lines, and weekly_report (counts nudge.miss). docs/EVENTS.md is current: the `relay.closed` row covers `to?`, reasons read, trigger_dead and expired, and the nudge.miss row covers relay_expired.

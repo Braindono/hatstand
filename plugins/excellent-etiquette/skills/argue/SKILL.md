@@ -9,8 +9,8 @@ description: 'Use when: /argue [topic]; the operator wants a committee debate of
 - Default cheap mode: one pass, no subagents.
   1. Round 1: one position per seat (<=2 lines).
   2. Round 2: one-line rebuttals.
-  3. Chair synthesis table: option | backed by | main risk | token cost | confidence (green/yellow/white words per P-09).
-  4. One "insight" sentence; one recommendation (P-02).
+  3. Chair synthesis table: option | backed by | main risk | token cost | confidence (a confidence word, per CORE.md, option lists).
+  4. One "insight" sentence; one recommendation.
 - Seats must disagree where they honestly would; facts are looked up, not invented.
 - Total <=350 words.
 - `/argue deep`: one Sonnet subagent per seat, in parallel; cost ~7x, say so first.

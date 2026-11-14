@@ -115,7 +115,7 @@
   },
   {
    "name": "harness_inbox",
-   "description": "Unread mail. wait=secs long-poll.",
+   "description": "Unread mail. Read it at the start of a turn; never poll in a loop.",
    "inputSchema": {
     "type": "object",
     "properties": {

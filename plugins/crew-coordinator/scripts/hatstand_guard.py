@@ -60,7 +60,7 @@ _CC = "plugins/crew-coordinator/"
 # one state-cache test. Path plus sha256; anything else with the shape stops the push.
 SHAPE_PINNED = {
     _CC + "data/hash-vectors.json": "26b000602ec96ab36a4c005e00d269936ddbe3e15aeee213c7e75341cd64c3fb",
-    _CC + "docs/EVENTS.md": "f448d2235568daac6d34318326c11298d9107d2198bda48d67449dd8b32fe4c4",
+    _CC + "docs/EVENTS.md": "108b5f93330c7975cffab4cdd0d60cae5a4370bb34b85ac052e61709e33f9310",
     _CC + "scripts/hash_vectors.py": "b4349bca19d6e83a934345cbb9f62de9bfab32bb3149adc5ac470a4e59f3b416",
     _CC + "tests/test_cc161_state_cache.py": "889d98a22dd8c21bdb082e571ea708a973d252ca9691db027204cc9fa50eef45",
 }
@@ -308,7 +308,7 @@ CRED_RX = [(d, re.compile(p)) for d, p in CRED_RULES]
 # pinned file stops the push until its pin is updated in a reviewed release. Computed by running these rules over the tree.
 CRED_PINNED = {
     _CC + "tests/test_c170_r051a.py": "5eab27ebe0c9cc3a5973d1e03327ab228deb3499cbdc428d9d3b70bd729c45b7",
-    _CC + "tests/test_cc151_w3.py": "b31a6b85aa7c61d444dd469b6845acd93f829d310e5efdda12a0828cb38f91e0",
+    _CC + "tests/test_cc151_w3.py": "834a3e4ccb29a9c684882c695eefddbaae5b0d820f987bf0af713aa74df018bd",
     _CC + "tests/test_cc162_indexer.py": "6a3f0bec9c12c3e668b42cd1d6780f3ebbc017548fb7596cd8afc3ef308243ba",
     _CC + "tests/test_e4_c3.py": "603e2637f11bc37d86a072d8394f8f07cc7efea57502539eaa8abbd34b61a24e",
 }

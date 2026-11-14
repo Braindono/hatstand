@@ -500,6 +500,125 @@ def _same_machine(a, st=None):
     return H.norm_host(a.get("host")) in aliases      # a record from before 0.22.1: only a host name this machine used counts
 
 
+def _is_ask(x):
+    """A mail that asks for an answer: an answer kind (task, question, review) or any mail sent with expects_reply."""
+    return bool(x) and (x.get("kind") in RING_KINDS or bool(x.get("expects_reply")))
+
+
+CLOSING_KINDS = ("result", "handoff")      # round 6 (item 1): only these close an ask for the wake backstop; an acknowledgement never does
+
+
+def _ask_open(st, x, m):
+    """Round 4 (b), round 6 (item 1): is the ask `x` still open when mail `m` (the reply that cites it) is sent? Not when its task is finished, when
+    the replier's role dismissed it (owed_close), or when the sender of `m` (its lineage) already sent a result or handoff that answers it: on x's
+    thread after x, or by an answering ref. A message or notice ("on it") never closes it. The owed list keeps its older rule (any later message of
+    the agent on the thread clears it for that agent), so the two differ on purpose: an ack stops the nagging of the replier, not the asker's wait."""
+    try:
+        xid = x.get("id")
+        if (st.tasks.get(xid) or {}).get("state") in TERMINAL:
+            return False
+        frm = set(st.lineage(m.get("from"))) | {m.get("from")}
+        if owed_closed(st, xid, frm, st.role_of(m.get("from"))):
+            return False
+        lo, hi = x.get("seq") or 0, m.get("seq") or 0
+        for y_ in (st.threads.get(x.get("thread")) or {}).get("messages") or []:
+            y = st.messages.get(y_) or {}
+            if y_ != m.get("id") and lo < (y.get("seq") or 0) < hi and y.get("from") in frm and y.get("kind") in CLOSING_KINDS:
+                return False
+        for y_ in st.order:
+            y = st.messages[y_]
+            if y_ != m.get("id") and lo < (y.get("seq") or 0) < hi and y.get("from") in frm and y.get("kind") in CLOSING_KINDS \
+                    and _answers(st, y, x, xid):
+                return False
+    except Exception:
+        return True
+    return True
+
+
+def _reply_to_open_ask(st, m, rid=None):
+    """Round 6 (item 2): is `m` a reply_to an ask that is still open and was sent by recipient `rid` (or by any recipient when rid is None)?"""
+    try:
+        x = st.messages.get(m.get("parent") or "")
+        if not x or not _is_ask(x):
+            return False
+        if rid is not None:
+            lin = set(st.lineage(rid)) | {rid}
+        else:
+            cand = list(m.get("to_resolved") or [])
+            for tgt in m.get("to") or []:
+                if isinstance(tgt, str) and tgt.startswith("role:") and st.role_holder(tgt[5:]):
+                    cand.append(st.role_holder(tgt[5:]))
+            lin = set()
+            for c in cand:
+                lin |= set(st.lineage(c)) | {c}
+        asker_role = (st.agents.get(x.get("from")) or {}).get("role")        # round 7: the asker left and the role is vacant: still a reply to its ask
+        by_role = rid is None and asker_role and f"role:{asker_role}" in (m.get("to") or [])
+        return (x.get("from") in lin or bool(by_role)) and _ask_open(st, x, m)
+    except Exception:
+        return False
+
+
+def _eff_kind(st, m, rid=None):
+    """Round 6 (item 2): a plain `message` sent as a reply_to an open ask counts as a result for the doorbell (nudge, caps, backstop).
+    Round 7 (gap 1): any mail of a non-answer kind sent with expects_reply is an ask: it counts as a question (same ring, relay and rewake)."""
+    k = (m or {}).get("kind")
+    if k in ("message", "notice", "result", "handoff") and (m or {}).get("expects_reply") and (m or {}).get("from") not in ("human", "operator"):
+        return "question"
+    return "result" if k == "message" and _reply_to_open_ask(st, m, rid) else k
+
+
+def _waiting(st, m, rid):
+    """Raw read F3 (round 3 F5): the recipient `rid` is waiting on mail `m`: its lineage sent an ask (an answer kind, or a mail with expects_reply)
+    on the same thread earlier, or `m` answers an ask of its by `reply_to` or by a ref on another thread."""
+    try:
+        lin = set(st.lineage(rid)) | {rid}
+        for x_ in (st.threads.get(m.get("thread")) or {}).get("messages") or []:
+            x = st.messages.get(x_) or {}
+            if x.get("from") in lin and _is_ask(x) and (x.get("seq") or 0) < (m.get("seq") or 0) and _ask_open(st, x, m):      # round 5
+                return True
+        # refs are stored as shared-file keys, so a message id arrives as "<home folder>/m-...": the last path part is the id
+        for r_ in [m.get("parent")] + [str(r).rsplit("/", 1)[-1] for r in (m.get("refs") or [])]:
+            x = st.messages.get(r_) if isinstance(r_, str) else None
+            if x and x.get("from") in lin and _is_ask(x) and _ask_open(st, x, m):      # round 4 (b): an answered ask cannot ring a cold holder
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _waiting_role(st, m, role):
+    """Round 7 follow-up: does mail `m` answer an open ask sent by an agent that held `role` (the role may be vacant now)?"""
+    try:
+        cands = [m.get("parent")] + [str(r).rsplit("/", 1)[-1] for r in (m.get("refs") or [])]
+        cands += list((st.threads.get(m.get("thread")) or {}).get("messages") or [])
+        for r_ in cands:
+            x = st.messages.get(r_) if isinstance(r_, str) else None
+            if x and x.get("id") != m.get("id") and (x.get("seq") or 0) < (m.get("seq") or 0) and _is_ask(x) \
+                    and (st.agents.get(x.get("from")) or {}).get("role") == role and _ask_open(st, x, m):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _covered(h, st, m, rid):
+    """Raw read F3 (0.26.0): does the safety net of the three answer kinds (the cap relay, the scan's silent-sender relay and rewakes) cover this
+    message for recipient `rid`? task, question and review always. A result or handoff when the recipient is waiting on that thread or its role
+    has a verified wake routine: with the ladder gone a reply is otherwise heard only at the asker's next prompt."""
+    k = _eff_kind(st, m, rid)
+    if k in RING_KINDS:
+        return True
+    if k not in ("result", "handoff"):
+        return False
+    try:
+        role = st.role_of(rid)
+        if role and _wake_trigger(st, role, h):
+            return True
+    except Exception:
+        return False
+    return _waiting(st, m, rid)
+
+
 def _route(h, st, rid, a, kind, now, wake_ok=True):
     """0.22.0 (item 6, D-3e5e7): the ROLE is the address and the harness resolves it; the only thing a sender ever gets is the holder's
     own app session id. -> (hid or None, mail-only reason or None). 0.24.0 (item 5): wake_ok=False (R2) closes the cold id wake."""
@@ -544,6 +663,31 @@ def _do_one(hid, trig, line, mid, rewake=None, fields=False):
     return " ; ".join(parts) or None
 
 
+def _do_many(ring, line, mid, st):
+    """0.26.0 (item 12): the Do-line text of a send with several recipients, given ONCE. One recipient: _do_one as before. Several that all
+    take the same steps (all by session id, all by trigger, or all both): one SendMessage step naming every id (one send each, same text)
+    and one RemoteTrigger step naming every distinct trigger. Recipients of different shapes keep their own steps, identical ones merged.
+    Round 3 (F7): with two or more session ids the report is one nudge_result per recipient (to = that recipient's session id), so one
+    recipient's refusal still asks for its relay after another's delivery was reported."""
+    items = [(x, g) for _, _, x, g in ring]
+    fld = lambda g: bool(g and registered_trigger(st, g))
+    if len(items) == 1:
+        return _do_one(items[0][0], items[0][1], line, mid, fields=fld(items[0][1]))
+    shapes = {(bool(x), bool(g)) for x, g in items}
+    if len(shapes) == 1:
+        hids = list(dict.fromkeys(x for x, _ in items if x))
+        trigs = list(dict.fromkeys(g for _, g in items if g))
+        out = _do_one(" and ".join(hids) + (" (one send each, the same text)" if len(hids) > 1 else "") if hids else None,
+                      " and ".join(trigs) if trigs else None, line, mid, fields=any(fld(g) for g in trigs))
+    else:
+        out = " ; ".join(dict.fromkeys(_do_one(x, g, line, mid, fields=fld(g)) for x, g in items))
+    keys = list(dict.fromkeys(x if x else str(rid)[:8] for rid, _a, x, _g in ring))
+    if out and len(keys) > 1:
+        out = out.replace(f'args={{msg_id:"{mid}",outcome:', f'args={{msg_id:"{mid}",to:"<one of the to values>",outcome:')
+        out += " One report per recipient, each with its own to (" + ", ".join(keys) + "): a send that went through is reported delivered, one the app refused is reported skipped with reason app_cap."
+    return out
+
+
 def _pick_id(h, st, rid, kind, now, wake_ok=True):
     """Session-id route. The id comes only from the holder's own record. A COLD recipient (its last harness call over 1 h ago, or none):
     action kinds get at most 1 id wake per 30 min summed over ALL senders (nudge.idwake, counted apart from offers); a result never wakes
@@ -568,17 +712,135 @@ def _pick_id(h, st, rid, kind, now, wake_ok=True):
     return hid
 
 
+def _error_miss(h, r):
+    """Round 7 C6c, C6d: the doorbell failed while handling a send. Best effort: every covered recipient counts a nudge.miss with the reason
+    doorbell_error. Cover is judged by the same rule as the normal path (_covered, or _eff_kind and _waiting_role for a role with no holder); when the
+    judgement itself fails the mail counts as covered. Never raises."""
+    try:
+        st = h.state()
+        m = st.messages.get((r or {}).get("id") or "") or {}
+        if not m or m.get("from") in ("human", "operator") or is_system_sender(m.get("from")):
+            return
+        rcpts = [x for x in (m.get("to_resolved") or []) if x not in ("human", "operator") and x != m.get("from")]
+        roles = [t[5:] for t in (m.get("to") or []) if isinstance(t, str) and t.startswith("role:")]
+        for rid in dict.fromkeys(rcpts):
+            try:
+                cov = bool(_covered(h, st, m, rid))
+            except Exception:
+                cov = True
+            if cov:
+                _miss(h, m["id"], rid, m.get("from"), "doorbell_error")
+        for role in dict.fromkeys(roles):
+            hol, key = None, "role:" + role
+            try:
+                hol = st.role_holder(role)
+                if hol and hol in rcpts:
+                    continue                        # already judged as the holder's own entry
+                if hol:                             # a live holder: the same _covered rule as the normal path, recorded under the holder
+                    cov, key = bool(_covered(h, st, m, hol)), hol
+                else:                               # a vacant role: judged from the message and the role's earlier asks
+                    eff = _eff_kind(st, m)
+                    cov = eff in RING_KINDS or (eff in ("result", "handoff") and _waiting_role(st, m, role))
+            except Exception:
+                cov = True
+            if cov:
+                _miss(h, m["id"], key, m.get("from"), "doorbell_error")
+    except Exception:
+        pass
+
+
+def _outcomes(h, st, out):
+    """Round 7 C6d: the per-recipient outcome of a send, built from the records actually written for the message (nudge.offered, nudge.skipped,
+    nudge.relay_offer, nudge.miss) plus the recipients named as mail only. -> [{to, key, outcome, reasons}], in the order the records were written."""
+    mid = (out or {}).get("id")
+    if not mid:
+        return []
+    names = lambda k: st.name_role(k) if k in st.agents else str(k)
+    by = {}
+
+    def add(key, outcome, reason=None):
+        e = by.setdefault(key, {"to": names(key), "key": key, "outcome": None, "reasons": []})
+        rank = {"ring": 5, "relay requested": 4, "miss": 3, "held": 2, "skipped": 1, "mail only": 0}
+        if e["outcome"] is None or rank[outcome] > rank[e["outcome"]]:
+            e["outcome"] = outcome
+        if reason and reason not in e["reasons"]:
+            e["reasons"].append(reason)
+
+    for e in _tail(h, needle=b'"nudge.'):
+        d = e.get("data") or {}
+        if (d.get("msg") or d.get("msg_id")) != mid:
+            continue
+        t = e.get("type")
+        if t == "nudge.offered":
+            for rid in d.get("to") or []:
+                add(rid, "ring")
+        elif t == "nudge.skipped":
+            for rid in d.get("to") or []:
+                rs = str(d.get("reason") or "")
+                add(rid, "held" if rs.startswith(HELD_REASONS) else "skipped", rs)
+        elif t == "nudge.relay_offer" and d.get("rewake") in (None, "extra"):
+            add(d.get("to"), "relay requested", str(d.get("reason") or ""))
+        elif t == "nudge.miss":
+            add(d.get("to"), "miss", str(d.get("reason") or ""))
+    for x in (out.get("nudge_mail_only") or []):
+        if x.get("key") not in by:
+            add(x.get("key") or x.get("to"), "mail only", str(x.get("reason") or ""))
+    return list(by.values())
+
+
+def _render_outcomes(h, out):
+    """Round 7 C6d: render the send result from _outcomes: `nudge_outcomes` lists every recipient; a recipient with a record that the older fields do
+    not name is added to `nudge_skipped`; with no ring and no text, `nudge` carries the first miss. Never raises."""
+    try:
+        if not isinstance(out, dict) or not out.get("id"):
+            return out
+        st = h.state()
+        m = st.messages.get(out["id"]) or {}
+        if not m or m.get("from") in ("human", "operator") or is_system_sender(m.get("from")):
+            return out
+        outs = _outcomes(h, st, out)
+        if not outs:
+            return out
+        out = dict(out, nudge_outcomes=outs)
+        named = {x.get("to") for x in (out.get("nudge_skipped") or [])} | {x.get("to") for x in (out.get("nudge_mail_only") or [])}
+        holders = set((out.get("holder") or {}).keys())
+        add = []
+        for e in outs:
+            if e["outcome"] in ("ring", "mail only"):
+                continue
+            label = e["to"]
+            soby = (st.agents.get(e["key"]) or {}).get("sobriquet")          # the older fields name a recipient by sobriquet or by "Name (role)"
+            if label in named or (soby and soby in named) or (str(e["key"]).startswith("role:") and str(e["key"])[5:] in holders):
+                continue
+            reason = "; ".join(e["reasons"]) or e["outcome"]
+            add.append({"to": label, "reason": reason, "relay": ("miss (%s)" % reason) if e["outcome"] == "miss" else e["outcome"]})
+        if add:
+            out["nudge_skipped"] = list(out.get("nudge_skipped") or []) + add
+        if "nudge" not in out and not any(e["outcome"] == "ring" for e in outs):
+            miss = [e for e in outs if e["outcome"] == "miss"]
+            if miss:
+                out["nudge"] = "miss (%s)" % (miss[0]["reasons"][0] if miss[0]["reasons"] else "miss")
+        return out
+    except Exception:
+        return out
+
+
 def attach_nudge(h, sender_ref, result):
     """Add `nudge` (and `skipped`) to a send result. Never raises; a failure leaves the result as it was.
-    0.24.0 (item 11): plus `holder` {role: state} for each role recipient of a kind that can ring."""
+    0.24.0 (item 11): plus `holder` {role: state} for each role recipient of a kind that can ring. Round 7 (C6d): a failure inside the doorbell counts a
+    doorbell_error miss for covered recipients, and the result is rendered from the records written for the message (_render_outcomes)."""
+    out = result
     try:
         out = _attach(h, sender_ref, result)
     except Exception:
-        return result
+        _error_miss(h, result)          # a failure is never silent for covered mail
+        return _render_outcomes(h, result)
     try:
-        return _attach_holder(h, out)
+        out = _attach_holder(h, out)
     except Exception:
-        return out
+        if not isinstance(out.get("nudge"), dict) and not out.get("nudge_skipped"):     # a ring or a skip record already carries the mail
+            _error_miss(h, out)
+    return _render_outcomes(h, out)
 
 
 # ---------------------------------------------------------------- 0.24.0 (A-b2950 item 16): wake measures
@@ -699,15 +961,31 @@ def _attach_holder(h, r):
         return r
     st = h.state()
     m = st.messages.get(r["id"])
-    if not m or m["from"] in ("human", "operator") or is_system_sender(m["from"]) or m["kind"] not in NUDGE_KINDS:
+    if not m or m["from"] in ("human", "operator") or is_system_sender(m["from"]) or _eff_kind(st, m) not in NUDGE_KINDS:
         return r
     roles = [t[5:] for t in m.get("to") or [] if isinstance(t, str) and t.startswith("role:")]
     if not roles:
         return r
     hs = {role: holder_state(h, st, role) for role in dict.fromkeys(roles)}
     out = dict(r, holder=hs)
-    if "nudge" not in out and not out.get("nudge_skipped") and all(v.startswith(("handed_off", "vacant")) for v in hs.values()):
-        out["nudge"] = "none (no live holder: queued for the next restore)"
+    vac = [role for role, v in hs.items() if v.startswith(("handed_off", "vacant"))]
+    if vac:
+        try:    # round 7 C6 and C6b (blocker 1): every vacant role of a covered mail counts its own miss, whatever the other recipients did
+            eff = _eff_kind(st, m)
+            covered = eff in RING_KINDS or (eff in ("result", "handoff") and any(_waiting_role(st, m, role) for role in vac))
+            if covered:
+                for role in vac:
+                    try:
+                        _miss(h, r["id"], "role:" + role, m["from"], "no_holder")
+                    except Exception:     # class F: a failure here (a ledger lock timeout) after another recipient rang must not lose this role's miss
+                        try:
+                            _miss(h, r["id"], "role:" + role, m["from"], "doorbell_error")
+                        except Exception:
+                            pass
+        except Exception:
+            covered = False
+        if "nudge" not in out and not out.get("nudge_skipped") and len(vac) == len(hs):
+            out["nudge"] = "none (no live holder: queued for the next restore" + ("; miss counted)" if covered else ")")
     return out
 
 
@@ -765,6 +1043,9 @@ def _attach(h, sender_ref, r):
         return r
     if m["from"] in ("human", "operator") or is_system_sender(m["from"]):
         return r
+    _ek = _eff_kind(st, m)
+    if _ek != m["kind"] and _ek in ("result", "question"):
+        m = dict(m, kind=_ek)               # round 6 (item 2), round 7 (gap 1): a reply to an open ask rings like a result, an expects_reply mail like a question
     if m["kind"] not in NUDGE_KINDS:
         # 0.23.0 (A-08480 item 4): a notice to a live recipient says it rings nobody; no event. Other non-ringing kinds are unchanged.
         if m["kind"] == "notice" and _live_recipients(st, m):
@@ -776,7 +1057,7 @@ def _attach(h, sender_ref, r):
     hour = _recent(h, now - 3600, OFFERS + ("nudge.skipped",))
     sent = [e for e in hour if e["type"] in OFFERS]
     seen_msg = {e["data"].get("msg") or e["data"].get("msg_id") for e in _recent(h, now - 86400, OFFERS)}
-    targets, skipped = [], []
+    targets, skipped, queued = [], [], []
     cand = list(m.get("to_resolved") or [])
     for tgt in m.get("to") or []:    # a role target resolves to its live holder now; groups and broadcasts never nudge
         if isinstance(tgt, str) and tgt.startswith("role:"):
@@ -785,6 +1066,19 @@ def _attach(h, sender_ref, r):
                 cand.append(hid)
     for rid in dict.fromkeys(cand):
         a = st.agents.get(rid)
+        if a and a.get("status") == "retired" and rid not in ("human", "operator") and rid != sender and _covered(h, st, m, rid):
+            # round 7 C6b (blocker 2): covered mail to the id of a chat that retired with no successor counts a miss and says so; the inbox is never read
+            reason = "no route: chat retired"
+            _skip(h, sender, mid, [rid], reason)
+            _miss(h, mid, rid, sender, "retired_no_successor")
+            skipped.append({"to": a.get("sobriquet"), "reason": reason, "relay": "miss (no_route)"})
+            continue
+        if a and a.get("handed_off") and a.get("status") in ("active", "idle") and rid not in ("human", "operator") and rid != sender \
+                and not (st.role_of(rid) and f"role:{st.role_of(rid)}" in (m.get("to") or [])) and _covered(h, st, m, rid):
+            # round 7 C6c: covered mail sent by the agent id of a chat that handed off and is not restored yet counts a miss and says it is queued
+            # (a send by role name is judged by _attach_holder as a vacant role: one miss, never two)
+            _miss(h, mid, rid, sender, "handed_off")
+            queued.append(rid)
         if rid in ("human", "operator") or rid == sender or not a or a.get("status") not in ("active", "idle") or a.get("handed_off"):
             continue                                   # 0.24.0 (item 11): a holder that handed off is not rung; the mail waits for the restore
         role = st.role_of(rid) or ""
@@ -806,7 +1100,7 @@ def _attach(h, sender_ref, r):
             _skip(h, sender, mid, [rid], reason)
             ent = {"to": a.get("sobriquet"), "reason": reason}
             which = _cap_which(reason)
-            if which and m["kind"] in RING_KINDS:      # 0.24.0 (item 5, R1c): a capped answer-kind mail goes to a relay, or is a counted miss
+            if which and _covered(h, st, m, rid):      # 0.24.0 (item 5, R1c): a capped answer-kind mail goes to a relay, or is a counted miss (F3: a covered result or handoff too)
                 ent["relay"] = _cap_relay(h, st, sender, mid, rid, m["kind"], "capped:" + which)
             skipped.append(ent)
             continue
@@ -815,9 +1109,14 @@ def _attach(h, sender_ref, r):
     if skipped:
         out["nudge_skipped"] = skipped
     if not targets:
+        if queued and not skipped:
+            out["nudge"] = "none (no live holder: queued for the next restore; miss counted)"
+            return out
         rel = [x["relay"] for x in skipped if str(x.get("relay") or "").startswith("relay requested")]
         if rel:
             out["nudge"] = rel[0]
+        elif skipped and all(str(x.get("relay") or "").startswith("miss") for x in skipped):
+            out["nudge"] = skipped[0]["relay"]
         return out
     srole = st.role_of(sender)
     line = (f"Mail {mid} from {srole or 'agent ' + sender[:8]}, thread {m['thread']}. Run harness_inbox (CLI: harness.py inbox --agent "
@@ -826,7 +1125,8 @@ def _attach(h, sender_ref, r):
     wevs = None
     for rid, a in targets:
         wake_ok, blk, rw = True, None, None
-        if m["kind"] in RING_KINDS:                    # 0.24.0 (item 5): R2 and nb 6
+        ek = m["kind"] if m["kind"] in RING_KINDS else ("question" if (m["kind"] in ("result", "handoff") and _waiting(st, m, rid)) else m["kind"])    # F3: a reply to a waiting asker rings like an ask (a cold holder too)
+        if ek in RING_KINDS:                           # 0.24.0 (item 5): R2 and nb 6
             wevs = _wake_events(h) if wevs is None else wevs
             blk = _wake_block(st, rid, mid, now, wevs)
             if blk and blk["state"] == "pending":
@@ -837,8 +1137,8 @@ def _attach(h, sender_ref, r):
             if blk:
                 rw = _rewake_due(blk, now, wevs)
                 wake_ok = rw is not None
-        hid, why = _route(h, st, rid, a, m["kind"], now, wake_ok)
-        trig = _pick_trig(h, st, rid, mid, now, m["kind"], wake_ok)
+        hid, why = _route(h, st, rid, a, ek, now, wake_ok)
+        trig = _pick_trig(h, st, rid, mid, now, ek, wake_ok)
         if hid or trig:
             ring.append((rid, a, hid, trig))
             if rw:
@@ -847,8 +1147,20 @@ def _attach(h, sender_ref, r):
             reason = f"{HELD_R2} ({blk['msg_id']})"
             _skip(h, sender, mid, [rid], reason)
             skipped.append({"to": a.get("sobriquet"), "reason": reason})
+        elif ek in RING_KINDS and str(why).startswith(HELD_ROUTE):
+            # round 7 (gap 2): a covered mail is never left with only "mail only" because a stale mark closed the id route: a relay or a counted
+            # miss, and a skip record the alarm scan reads (HELD_REASONS), exactly as for a capped ring
+            reason = HELD_ROUTE + " by a stale mark"
+            _skip(h, sender, mid, [rid], reason)
+            skipped.append({"to": a.get("sobriquet"), "reason": reason, "relay": _cap_relay(h, st, sender, mid, rid, m["kind"], "route_closed")})
+        elif ek in RING_KINDS and str(why).startswith(("no role", "no app session id", "holder on another machine")):
+            # round 7 follow-up (C6): covered mail to a recipient nothing can reach counts a miss (nudge.miss) and the result says so; the mail waits
+            reason = "no route: " + str(why).replace(": mail only", "")
+            _skip(h, sender, mid, [rid], reason)
+            _miss(h, mid, rid, sender, "no_route")
+            skipped.append({"to": a.get("sobriquet"), "reason": reason, "relay": "miss (no_route)"})
         else:
-            mail_only.append({"to": st.name_role(rid), "reason": why})
+            mail_only.append({"to": st.name_role(rid), "reason": why, "key": rid})
     if skipped:
         out["nudge_skipped"] = skipped
     if mail_only:
@@ -856,6 +1168,8 @@ def _attach(h, sender_ref, r):
     if not ring:
         if mail_only:
             out["nudge"] = "none (" + "; ".join(sorted({x["reason"].replace(": mail only", "") for x in mail_only})) + ": mail only)"
+        elif all("relay" in x for x in skipped):      # round 7 (gap 2): every recipient's route is closed; each has its relay request or counted miss
+            out["nudge"] = skipped[0]["relay"]
         else:       # 0.24.0 (item 5): every recipient held back by nb 6 or R2; the reasons are in nudge_skipped
             out["nudge"] = "none (" + "; ".join(sorted({x["reason"] for x in skipped if "relay" not in x})) + ")"
         return out
@@ -871,16 +1185,22 @@ def _attach(h, sender_ref, r):
     for blk, n, rid in rewakes:
         _write_rewake(h, blk, n, rid, via=mid)
     n_hour = sum(1 for e in sent if e["data"].get("from") == sender) + 1
-    out["nudge"] = {"line": line, "to": [st.name_role(rid) for rid in ids], "msg_id": mid, "thread": m["thread"],
+    to_, seen_ = [], set()
+    for rid, _, x, _g in ring:        # 0.26.0 (item 12): each recipient once, with its session when it rings by id
+        if rid not in seen_:
+            seen_.add(rid)
+            to_.append(st.name_role(rid) + (" " + x if x else ""))
+    out["nudge"] = {"line": line, "to": to_, "msg_id": mid, "thread": m["thread"],
                     "cap_state": f"{n_hour}/{cfg['nudge_per_agent_hour']} this hour",
-                    "do": " ; ".join(_do_one(x, g, line, mid, fields=bool(g and registered_trigger(st, g))) for _, _, x, g in ring)}
+                    "do": _do_many(ring, line, mid, st)}
     return out
 
 
 # ---------------------------------------------------------------- 0.24.0 (A-b2950 item 5): wake rules for task, question, review
 
 HELD_R2, HELD_NB6 = "unread wake pending", "rung under "   # item 5: the R2 and nb 6 skip reasons start with these; built only from here
-HELD_REASONS = (HELD_R2, HELD_NB6)                          # alarm_scan still counts this mail (fix 1; critic m-da843f8de897 nb)
+HELD_ROUTE = "id route closed"                              # round 7 (gap 2): a covered mail whose id route a stale mark closed: relay or counted miss, and the alarm
+HELD_REASONS = (HELD_R2, HELD_NB6, HELD_ROUTE)                          # alarm_scan still counts this mail (fix 1; critic m-da843f8de897 nb)
 _WAKE_EV = ("nudge.offered", "nudge.result", "nudge.rewake", "nudge.relay_offer", "nudge.miss")
 
 
@@ -888,7 +1208,49 @@ def _wake_events(h):
     return [e for e in _tail(h, needle=b'"nudge.') if e.get("type") in _WAKE_EV]
 
 
+def _rkeys(d):
+    """Round 6 (item 3): the report key of each recipient of a nudge offer, in order: its app session id when it rings by id, else (a recipient
+    reached only by its wake routine) the first 8 characters of its agent id."""
+    tos, hids = list(d.get("to") or []), list(d.get("hids") or [])
+    return [(hids[i] if i < len(hids) and hids[i] else str(rid)[:8]) for i, rid in enumerate(tos)]
+
+
+def _partial_mids(evs):
+    """Round 4 (addendum): messages whose nudge.result events are per-recipient (`to_session`) and do not yet cover every recipient session of
+    the offer, with no whole-message result. A partial result is one recipient's report: it must not make the scans treat the whole send as
+    reported (the unreported scan, the expiry scan, the alarm and the wake block read results by message id)."""
+    offers, per, whole = {}, {}, set()
+    for e in evs:
+        d = e.get("data") or {}
+        if e.get("type") == "nudge.offered":
+            offers[d.get("msg_id") or d.get("msg")] = set(_rkeys(d))
+        elif e.get("type") == "nudge.result":
+            k = d.get("msg_id") or d.get("msg")
+            if d.get("to_session"):
+                per.setdefault(k, set()).add(d["to_session"])
+            else:
+                whole.add(k)
+    return {k for k, got in per.items() if k not in whole and not (offers.get(k) and offers[k] <= got)}
+
+
+def _drop_partial(evs):
+    """`evs` without the per-recipient results of a message that is not fully reported yet (see _partial_mids)."""
+    part = _partial_mids(evs)
+    if not part:
+        return evs
+    return [e for e in evs if not (e.get("type") == "nudge.result" and (e.get("data") or {}).get("to_session")
+                                   and ((e.get("data") or {}).get("msg_id") or (e.get("data") or {}).get("msg")) in part)]
+
+
+def _closes(d, to_session=None, to=None):
+    """Does the nudge.result data `d` close a relay offer for recipient session `to_session` (or, for a recipient with no session, agent `to`)? A
+    whole-message result does; a per-recipient one only its own recipient's offer."""
+    key = to_session or (str(to)[:8] if to else None)
+    return not d.get("to_session") or not key or d.get("to_session") == key
+
+
 def _first_results(evs):
+    evs = _drop_partial(evs)
     out = {}
     for e in evs:
         if e.get("type") == "nudge.result":
@@ -922,7 +1284,7 @@ def _wake_block(st, rid, mid, now, evs):
         if m0 == mid or now - t > WOKEN_WINDOW_S or not ids & set(d.get("to") or []):
             continue
         msg = st.messages.get(m0) or {}
-        if msg.get("kind") not in RING_KINDS or ids & set(msg.get("read_by") or []):
+        if _eff_kind(st, msg) not in RING_KINDS or ids & set(msg.get("read_by") or []) or _closed_for(st, m0, ids):
             continue
         r = res.get(m0)
         info = {"msg_id": m0, "from": d.get("from"), "role": st.role_of(rid), "to": rid}
@@ -1044,11 +1406,14 @@ def wake_scan(h, now=None, force=False):
         res = _first_results(evs)
         relayed = {(e.get("data") or {}).get("msg_id") for e in evs if e.get("type") == "nudge.relay_offer"}
         missed = {(e.get("data") or {}).get("msg_id") for e in evs if e.get("type") == "nudge.miss"}
+        relayed_p = {((e.get("data") or {}).get("msg_id"), (e.get("data") or {}).get("to")) for e in evs
+                     if e.get("type") == "nudge.relay_offer" and (e.get("data") or {}).get("rewake") in (None, "extra")}
+        missed_p = {((e.get("data") or {}).get("msg_id"), (e.get("data") or {}).get("to")) for e in evs if e.get("type") == "nudge.miss"}
         for e in offers:
             d = e.get("data") or {}
             mid, t = d.get("msg_id") or d.get("msg"), float(e.get("t") or 0)
             msg = st.messages.get(mid) or {}
-            if msg.get("kind") not in RING_KINDS:
+            if msg.get("kind") not in RING_KINDS and not any(_covered(h, st, msg, r_) for r_ in (d.get("to") or [])):     # raw read F3
                 continue
             ids = set()
             for rid in d.get("to") or []:
@@ -1057,20 +1422,44 @@ def wake_scan(h, now=None, force=False):
                 hol = st.role_holder(role) if role else None
                 if hol:
                     ids |= set(st.lineage(hol)) | {hol}
-            if ids & set(msg.get("read_by") or []):
-                continue
             r = res.get(mid)
+            if r is not None and (ids & set(msg.get("read_by") or []) or _closed_for(st, mid, ids, d.get("roles") or [])):
+                continue
             if r is None:
-                if mid in relayed or mid in missed or not (RELAY_SILENT_S <= now - t < RELAY_TTL_S):
+                # round 7 (C6d, spec rule 8): the sender never reported: every recipient that has not read the mail is judged on its own, not only the first
+                if not (RELAY_SILENT_S <= now - t < RELAY_TTL_S):
                     continue
-                rr = _request_relay(h, st, d, mid, "sender_silent", actor="system")
-                if rr and rr.get("relay_requested"):
-                    out.append(("relay", mid))
-                else:
-                    for rid in (d.get("to") or [])[:1]:
-                        _miss(h, mid, rid, d.get("from"), "sender_silent; " + ("relay cap full" if _relay_target(h, st, d) else "no relay target"))
-                    out.append(("miss", mid))
-                missed.add(mid)
+                tos, hids, bts = list(d.get("to") or []), list(d.get("hids") or []), list(d.get("by_trigger") or [])
+                roles_ = list(d.get("roles") or [])
+                rkeys = _rkeys(d)
+                unread = []
+                for i, rid in enumerate(tos):
+                    lin = set(st.lineage(rid)) | {rid}
+                    role_i = (roles_[i] if i < len(roles_) else None) or st.role_of(rid)
+                    hol_i = st.role_holder(role_i) if role_i else None
+                    if hol_i:
+                        lin |= set(st.lineage(hol_i)) | {hol_i}
+                    if lin & set(msg.get("read_by") or []) or _closed_for(st, mid, lin, [role_i]):
+                        continue
+                    unread.append((i, rid, role_i))
+                woken_to = {(x.get("data") or {}).get("to_session") for x in evs if x.get("type") == "nudge.result"
+                            and (x.get("data") or {}).get("msg_id") == mid and (x.get("data") or {}).get("to_session") and _woken(x.get("data") or {})}
+                for (i, rid, role_i) in unread:
+                    key_i = rkeys[i] if i < len(rkeys) else None
+                    if key_i in woken_to:
+                        continue                             # this recipient's own report says it was rung
+                    if (mid, rid) in relayed_p or (mid, rid) in missed_p:
+                        continue                             # round 7 (class A): relayed and missed are kept per (message, recipient)
+                    di = dict(d, to=[rid], hids=[hids[i] if i < len(hids) else None], by_trigger=[bts[i] if i < len(bts) else False], roles=[role_i],
+                              _key=key_i)
+                    rr = _request_relay(h, st, di, mid, "sender_silent", actor="system")
+                    if rr and rr.get("relay_requested"):
+                        if not rr.get("already"):
+                            out.append(("relay", mid))
+                    else:
+                        _miss(h, mid, rid, d.get("from"), "sender_silent; " + ("relay cap full" if _relay_target(h, st, di) else "no relay target"))
+                        out.append(("miss", mid))
+                    relayed_p.add((mid, rid)) if rr and rr.get("relay_requested") else missed_p.add((mid, rid))
                 continue
             if not _woken(r[0]):
                 continue
@@ -1115,6 +1504,12 @@ def _rewake_offer(h, st, blk, n, msg):
 def rewake_relay_line(d):
     """Fixed fields only. SendMessage to the holder's id, or the role's trigger run with no body; no report either way."""
     n, mid = d.get("rewake"), d.get("msg_id")
+    if n == "extra":        # round 7 (C6d): a relay for one recipient of a send whose sender never reported; no report needed
+        if d.get("to_session"):
+            return (f'Do: SendMessage to {d["to_session"]}: Mail {mid} from {d.get("role") or "agent"}, thread {d.get("thread")}. Run harness_inbox. '
+                    f'(Relay for a sender that cannot ring; fixed fields only.) No report is needed.')
+        return (f'Do: RemoteTrigger action=run trigger_id={d.get("trigger")} (relay for {mid}; load the tool with ToolSearch select:RemoteTrigger if it is '
+                f'deferred; run with no body; no other trigger tool). No report is needed. No RemoteTrigger tool here: skip it.')
     if d.get("to_session"):
         return (f'Do: SendMessage to {d["to_session"]}: Mail {mid} from {d.get("role") or "agent"}, thread {d.get("thread")}. Run '
                 f'harness_inbox. (Rewake {n} of 2 for woken mail still unread; fixed fields only.) No report is needed.')
@@ -1392,7 +1787,7 @@ def relay_fire_evidence(reason):
     return {"http": str(status), "session": m.group(1), "statuses": [str(status)], "status": status}
 
 
-def record_result(h, caller, msg_id, outcome, reason=None, fire=None):
+def record_result(h, caller, msg_id, outcome, reason=None, fire=None, to=None):
     """harness_admin op=nudge_result {msg_id, outcome, reason}. A skipped result whose reason starts stale_id marks the offer's app session
     ids stale (nudge.stale_id) until the recipient next calls the harness from that session. One result per message (a second call answers
     already_reported). A result counts even after the offer was flagged unreported. Recorded with `by` (reporter) and `for` (the sender).
@@ -1402,7 +1797,10 @@ def record_result(h, caller, msg_id, outcome, reason=None, fire=None):
       * a relaying agent (any non-sender): only delivered, woke or refused_by_app (item 1). On a relayed message only the recorded claimer,
         with the SendMessage `delivery:` state and `message_id:` UUID in its reason (item 4); refused_by_app releases the claim and caps
         that relayer for 60 min. On a trigger-offered message the 0.22.2 HTTP status + cse_/session_ id form. Anyone else is refused.
-      Evidence is self-reported: the harness checks its shape and the claim, not the run."""
+      Evidence is self-reported: the harness checks its shape and the claim, not the run.
+    Round 3 (F7): a send with several recipients is reported once per recipient: `to` is that recipient's app session id (one of the offer's).
+    The result is then keyed by (message, recipient), so a refused recipient's skip (a relay request) never hits "already reported" because
+    another recipient's delivery was filed first. Without `to` the report covers the whole message, as before."""
     import harness as H
     msg_id = str(msg_id or "").strip()
     if outcome not in OUTCOMES:
@@ -1422,6 +1820,25 @@ def record_result(h, caller, msg_id, outcome, reason=None, fire=None):
     mine = set(st.lineage(caller)) | {caller}
     kind = (st.messages.get(msg_id) or {}).get("kind")
     why = " ".join(str(reason or "").replace("\x00", " ").split())[:80]
+    to = str(to).strip() if isinstance(to, str) and to.strip() else None
+    keys = _rkeys(offer)
+    if len(keys) > 1:
+        # round 6 (item 3): a send with several recipients is reported once per recipient. A whole-message report that arrives after some
+        # per-recipient ones is never allowed to swallow a recipient that has not reported: a skipped relay-ask then names the first missing one.
+        cov = set()
+        for e in _tail(h, needle=b'"nudge.result"'):
+            d_ = e.get("data") or {}
+            if e.get("type") == "nudge.result" and d_.get("msg_id") == msg_id and d_.get("to_session"):
+                cov.add(d_["to_session"])
+        missing = [k_ for k_ in keys if k_ not in cov]
+        if not to and cov and missing and outcome == "skipped" and offer.get("from") in mine:
+            to = missing[0]
+    if to:       # round 3 F7: one report per recipient; `to` must be one of this offer's recipient keys (session id, or agent id prefix)
+        if to not in keys:
+            raise H.HarnessError("to must be one recipient of this message's nudge (%s); nothing was recorded" % ", ".join(keys[:6] or ["none"]))
+        i_ = keys.index(to)
+        offer = dict(offer, to=[(offer.get("to") or [])[i_]], hids=[((offer.get("hids") or []) + [None] * len(keys))[i_]],
+                     by_trigger=[((offer.get("by_trigger") or []) + [False] * len(keys))[i_]], _key=to)
     ev = None
     status = None
     by_trig = any(offer.get("by_trigger") or [])
@@ -1441,7 +1858,9 @@ def record_result(h, caller, msg_id, outcome, reason=None, fire=None):
             # 0.24.0 (item 5, R1): the three answer kinds always ring; a skip needs a reason from the fixed list (nothing is recorded)
             raise H.HarnessError("a %s always rings: skipped needs one of these reasons: %s (any other, such as 'not needed', is refused; "
                                  "nothing was recorded, ring the recipient and report again)" % (kind, ", ".join(SKIP_OK)))
-        if outcome == "skipped" and (code in RELAY_ASK_RING if kind in RING_KINDS else why.lower().startswith(RELAY_ASK)):
+        # 0.26.0 (fix round 1, critic B1): app_cap and no_remotetrigger ask for a relay for every nudge kind (result and handoff included), so with the
+        # ladder gone a skipped ring of a reply is still carried; the three answer kinds keep their stricter reason list above
+        if outcome == "skipped" and (code in RELAY_ASK_RING or (kind not in RING_KINDS and why.lower().startswith(RELAY_ASK_RING))):
             r = _request_relay(h, st, offer, msg_id, why)
             if r:
                 _pop_pending(h, offer.get("from"), msg_id)
@@ -1489,6 +1908,8 @@ def record_result(h, caller, msg_id, outcome, reason=None, fire=None):
             raise H.HarnessError("a fire report never names a body or text: RemoteTrigger runs with no body; nothing was recorded")
         stale_fields = _fire_check(st, msg_id, status, fire)
     data = {"msg": msg_id, "msg_id": msg_id, "by": caller, "for": offer.get("from"), "outcome": outcome, "reason": why}
+    if to:
+        data["to_session"] = to
     if ev:
         data["evidence"] = dict(ev, self_reported=True)
     if status is not None and outcome in ("woke", "held", "skipped"):
@@ -1496,7 +1917,8 @@ def record_result(h, caller, msg_id, outcome, reason=None, fire=None):
 
     def _fresh(store):
         for e in store.read_all()[-3000:]:
-            if e.get("type") == "nudge.result" and ((e.get("data") or {}).get("msg_id") == msg_id):
+            d_ = e.get("data") or {}
+            if e.get("type") == "nudge.result" and d_.get("msg_id") == msg_id and ((not d_.get("to_session")) if not to else d_.get("to_session") == to):
                 raise _Already()
     try:
         h.store.append("nudge.result", caller, data, precheck=_fresh)
@@ -1523,7 +1945,8 @@ def record_result(h, caller, msg_id, outcome, reason=None, fire=None):
                     h.store.append("nudge.stale_id", caller, {"msg_id": msg_id, "to": to, "host_session_id": hid})   # settle clears it
                 except Exception:
                     pass
-    _pop_pending(h, offer.get("from"), msg_id)
+    if not to or msg_id not in _partial_mids([e for e in _tail(h, needle=b'"nudge.') if e.get("type") in ("nudge.offered", "nudge.result")]):
+        _pop_pending(h, offer.get("from"), msg_id)         # round 4: a per-recipient report leaves the send pending until every recipient has reported
     return {"msg_id": msg_id, "reported": True, "outcome": outcome}
 
 
@@ -1604,7 +2027,8 @@ def _relay_view(h, msg_id, evs=None):
 
 
 def _results(h):
-    return {(e.get("data") or {}).get("msg_id") for e in _tail(h, needle=b'"nudge.result"') if e.get("type") == "nudge.result"}
+    evs = [e for e in _tail(h, needle=b'"nudge.') if e.get("type") in ("nudge.offered", "nudge.result")]
+    return {(e.get("data") or {}).get("msg_id") for e in _drop_partial(evs) if e.get("type") == "nudge.result"}
 
 
 def _request_relay(h, st, offer, msg_id, why, actor=None):
@@ -1619,17 +2043,33 @@ def _request_relay(h, st, offer, msg_id, why, actor=None):
     now = time.time()
     for e in _tail(h, needle=b'"nudge.result"'):
         d = e.get("data") or {}
-        if e.get("type") == "nudge.result" and d.get("msg_id") == msg_id and _woken(d):
+        key_ = offer.get("_key")
+        if e.get("type") == "nudge.result" and d.get("msg_id") == msg_id and _woken(d) \
+                and ((key_ and d.get("to_session") == key_) or not key_):         # round 6: a recipient's own skip is judged against its own reports only       # round 3 F7: another recipient's delivery
             return {"msg_id": msg_id, "relay_requested": False,
                     "refused": "one ring per recipient session: %s was already reported %s" % (msg_id, d.get("outcome"))}
     evs = _relay_events(h)
-    if _relay_view(h, msg_id, evs)["offer"]:
-        return {"msg_id": msg_id, "relay_requested": True, "already": True}
+    existing = _relay_view(h, msg_id, evs)["offer"]
+    xkey = None
+    if existing:
+        # round 7 (C6d, class A): the lookup is per (message, recipient). The message's first relay is the reported one; another recipient of the same
+        # message gets its own offer (key <msg>#x<agent8>, no report needed) instead of a false "already"
+        if existing.get("to") == target[0]:
+            return {"msg_id": msg_id, "relay_requested": True, "already": True}
+        xkey = "%s#x%s" % (msg_id, str(target[0])[:8])
+        if _relay_view(h, xkey, evs)["offer"]:
+            return {"msg_id": msg_id, "relay_requested": True, "already": True}
     if sum(1 for e in evs if e["type"] == "nudge.relay_offer" and (e.get("data") or {}).get("from") == sender
            and float(e.get("t") or 0) >= now - 3600) >= RELAY_PER_SENDER_HOUR:
         return None
     m = st.messages.get(msg_id) or {}
     role = st.role_of(sender) or "agent"
+    if xkey:
+        h.store.append("nudge.relay_offer", actor or sender, {"msg_id": msg_id, "key": xkey, "rewake": "extra", "to": target[0], "to_session": target[1],
+                                                               "trigger": target[2], "from": sender, "role": role, "to_role": st.role_of(target[0]),
+                                                               "thread": m.get("thread"), "reason": why})
+        return {"msg_id": msg_id, "relay_requested": True, "nudge": "relay requested (%s)" % direction(st, sender, target[0]),
+                "note": "a live local role holder will ring the recipient for you; nothing else to do"}
     h.store.append("nudge.relay_offer", actor or sender, {"msg_id": msg_id, "to": target[0], "to_session": target[1], "trigger": target[2],
                                                            "fields": bool(target[2] and registered_trigger(st, target[2])),
                                                            "from": sender,
@@ -1675,27 +2115,29 @@ def relay_expire(h, now=None):
         if not offers:
             return out
         done = _results(h) | _closed(h)
+        cp = _closed_pairs(h)
         st = None
         for e in offers:
             d = e.get("data") or {}
             mid = d.get("msg_id")
-            if d.get("rewake") or mid in done or now - float(e.get("t") or 0) < RELAY_TTL_S:
+            if (d.get("rewake") and d.get("rewake") != "extra") or _done(done, cp, mid, d.get("to")) or now - float(e.get("t") or 0) < RELAY_TTL_S:
                 continue                                   # a rewake offer never writes a result (item 5 fix 1)
             st = st or h.state()
             read = d.get("to") in ((st.messages.get(mid) or {}).get("read_by") or [])
 
-            def _once(store, mid=mid):
+            def _once(store, mid=mid, ts=d.get("to_session"), tg=d.get("to")):
                 for x in store.read_all()[-3000:]:
-                    if x.get("type") in ("relay.closed", "nudge.result") and ((x.get("data") or {}).get("msg_id") == mid):
+                    if x.get("type") in ("relay.closed", "nudge.result") and ((x.get("data") or {}).get("msg_id") == mid) \
+                            and ((x.get("type") == "relay.closed" and (x["data"].get("to") in (None, tg))) or (x.get("type") == "nudge.result" and _closes(x.get("data") or {}, ts, tg))):      # round 4: another recipient's report is not this offer's
                         raise _Already()
             try:
-                h.store.append("relay.closed", "system", {"msg_id": mid, "reason": "read" if read else "expired"}, precheck=_once)
+                h.store.append("relay.closed", "system", {"msg_id": mid, "to": d.get("to"), "reason": "read" if read else "expired"}, precheck=_once)
                 if not read:
                     _miss(h, mid, d.get("to"), d.get("from"), "relay_expired")
                 out.append(mid)
             except _Already:
                 pass
-            done.add(mid)
+            cp.add((mid, d.get("to")))
     except Exception:
         pass
     return out
@@ -1749,6 +2191,7 @@ def claim_relay(h, caller, now=None):
         if _capped(h, caller, evs, now):
             return None
         done = _results(h) | _closed(h)                  # item 18 point 3: a read closes the relay
+        cp = _closed_pairs(h)
         last_claim = {}
         for e in evs:
             if e["type"] == "nudge.relay_claim":
@@ -1765,7 +2208,7 @@ def claim_relay(h, caller, now=None):
                 if line:
                     return line
                 continue
-            if mid in done or now - float(e.get("t") or 0) >= RELAY_TTL_S:
+            if _done(done, cp, mid, d.get("to")) or now - float(e.get("t") or 0) >= RELAY_TTL_S:
                 continue
             if d.get("trigger") and trigger_dead(st, d["trigger"]):
                 _close_dead(h, d)                          # 0.25.0 (item 22): a dead routine is closed here, never carried
@@ -1779,7 +2222,7 @@ def claim_relay(h, caller, now=None):
                     if v["claim"] != old:
                         raise _Already()
                     for x in store.read_all()[-3000:]:
-                        if x.get("type") == "nudge.result" and ((x.get("data") or {}).get("msg_id") == mid):
+                        if x.get("type") == "nudge.result" and ((x.get("data") or {}).get("msg_id") == mid) and _closes(x.get("data") or {}, d.get("to_session"), d.get("to")):
                             raise _Already()
                 try:    # 0.22.3b (blocker 1b): no report 5 min after the claim: release it to the next holder
                     h.store.append("nudge.relay_released", "system", {"msg_id": mid, "by": "system", "claimer": old.get("by"),
@@ -1806,7 +2249,7 @@ def claim_relay(h, caller, now=None):
                 if v["claim"]:
                     raise _Already()
                 for x in store.read_all()[-3000:]:
-                    if x.get("type") == "nudge.result" and ((x.get("data") or {}).get("msg_id") == mid):
+                    if x.get("type") == "nudge.result" and ((x.get("data") or {}).get("msg_id") == mid) and _closes(x.get("data") or {}, d.get("to_session"), d.get("to")):
                         raise _Already()
             try:
                 h.store.append("nudge.relay_claim", caller, {"msg_id": mid, "by": caller, "to_session": d.get("to_session")},
@@ -1847,10 +2290,10 @@ def _close_dead(h, d):
 
         def _once(store):
             for x in store.read_all()[-3000:]:
-                if x.get("type") == "relay.closed" and (x.get("data") or {}).get("msg_id") == mid:
+                if x.get("type") == "relay.closed" and (x.get("data") or {}).get("msg_id") == mid and (x["data"].get("to") in (None, d.get("to"))):
                     raise _Already()
         try:
-            h.store.append("relay.closed", "system", {"msg_id": mid, "reason": "trigger_dead"}, precheck=_once)
+            h.store.append("relay.closed", "system", {"msg_id": mid, "to": d.get("to"), "reason": "trigger_dead"}, precheck=_once)
         except _Already:
             return
         _miss(h, mid, d.get("to"), d.get("from"), "trigger_dead")
@@ -1859,8 +2302,21 @@ def _close_dead(h, d):
 
 
 def _closed(h):
-    """Item 18 point 3: msg ids whose relay a read closed (relay.closed)."""
-    return {(e.get("data") or {}).get("msg_id") for e in _tail(h, needle=b'"relay.closed"') if e.get("type") == "relay.closed"}
+    """Item 18 point 3: msg ids whose relay a read closed (relay.closed) for the whole message. Round 7 (C6d, class A): a close that names a recipient (`to`)
+    closes only that recipient's offer: see _closed_pairs and _done."""
+    return {(e.get("data") or {}).get("msg_id") for e in _tail(h, needle=b'"relay.closed"')
+            if e.get("type") == "relay.closed" and not (e.get("data") or {}).get("to")}
+
+
+def _closed_pairs(h):
+    """Round 7 (C6d, class A): {(msg id, recipient)} whose relay a read, an expiry or a dead routine closed for that recipient only."""
+    return {((e.get("data") or {}).get("msg_id"), (e.get("data") or {}).get("to")) for e in _tail(h, needle=b'"relay.closed"')
+            if e.get("type") == "relay.closed" and (e.get("data") or {}).get("to")}
+
+
+def _done(done, pairs, mid, to=None):
+    """Is the relay of (message, recipient) done: a result for the whole message, a whole-message close, or a close for this recipient."""
+    return mid in done or (mid, to) in pairs
 
 
 def close_relays(h, aid, ids):
@@ -1876,14 +2332,16 @@ def close_relays(h, aid, ids):
         st = h.state()
         mine = set(st.lineage(aid)) | {aid}
         done = _results(h) | _closed(h)
+        cp = _closed_pairs(h)
         for e in offers:
             d = e.get("data") or {}
             mid, to = d.get("msg_id"), d.get("to")
-            if mid in done or mid in out:
+            if _done(done, cp, mid, to) or (mid, to) in cp:
                 continue
             if to not in mine and not (st.role_of(to) and st.role_holder(st.role_of(to)) == aid):
                 continue
-            h.store.append("relay.closed", "system", {"msg_id": mid, "reason": "read"})
+            h.store.append("relay.closed", "system", {"msg_id": mid, "to": to, "reason": "read"})     # round 7 (class A): closes this recipient's offer only
+            cp.add((mid, to))
             out.append(mid)
     except Exception:
         pass
@@ -1901,11 +2359,12 @@ def live_claim_line(h, caller, now=None):
         if not mine_claims:
             return None
         done = _results(h) | _closed(h)
+        cp = _closed_pairs(h)
         st = h.state()
         for c in reversed(mine_claims):
             mid = (c.get("data") or {}).get("msg_id")
             view = _relay_view(h, mid, evs)
-            if mid in done or not view["offer"] or not view["claim"] or view["claim"].get("by") != caller:
+            if _done(done, cp, mid, (view["offer"] or {}).get("to")) or not view["offer"] or not view["claim"] or view["claim"].get("by") != caller:
                 continue
             if view["offer"].get("to") in ((st.messages.get(mid) or {}).get("read_by") or []):
                 continue
@@ -1950,13 +2409,14 @@ def relay_notice_lines(h, st, aid, now=None):
             return out
         claimed = {(e.get("data") or {}).get("msg_id") for e in evs if e.get("type") == "nudge.relay_claim"}
         done = _results(h) | _closed(h)
+        cp = _closed_pairs(h)
         p = _sp(h, aid)
         d0 = _load(p)
         shown = set(d0.get("relay_notice_shown") or [])
         for e in offers:
             d = e.get("data") or {}
             mid = d.get("msg_id")
-            if mid in claimed or mid in done or mid in shown or d.get("to") in ((st.messages.get(mid) or {}).get("read_by") or []):
+            if mid in claimed or _done(done, cp, mid, d.get("to")) or mid in shown or d.get("to") in ((st.messages.get(mid) or {}).get("read_by") or []):
                 continue
             out.append(f"relay for {mid} not claimed in {RELAY_NOTICE_S // 60} min, mail still unread")
             shown.add(mid)
@@ -2017,46 +2477,147 @@ def _lineage(st, aid):
     return set(st.lineage(aid))
 
 
+def _role_ids(st, role):
+    """0.26.0 (item 6): every agent that held `role` (its `role` field) with its predecessors: a reply from any of them answers mail
+    addressed to the role, so a no-carry successor does not inherit items its predecessor answered."""
+    out = set()
+    r = str(role or "").lower()
+    for a_, x in st.agents.items():
+        if str(x.get("role") or "").lower() == r:
+            out |= set(st.lineage(a_))
+    for a_ in (getattr(st, "role_ever", None) or {}).get(role) or ():
+        out |= set(st.lineage(a_))
+    return out
+
+
+def _answers(st, x, m, mid):
+    """0.26.0 (item 7): does message `x` answer mail `m`? A reply_to it; or a ref to it in a result, notice or message sent to the original
+    sender or the sender's role. A bare ref in a message to a third party never does."""
+    if x.get("parent") == mid:
+        return True
+    # refs are stored as shared-file keys, so a message id arrives as "<home folder>/m-..."; match the id as the last path part
+    if not any(r == mid or str(r).endswith("/" + mid) for r in (x.get("refs") or [])) or x.get("kind") not in ("result", "notice", "message"):
+        return False
+    frm = m.get("from")
+    if frm == "human":
+        return any(t in ("human", "operator") for t in x.get("to") or [])
+    if set(x.get("to_resolved") or []) & set(st.lineage(frm)):
+        return True
+    role = st.role_of(frm) if frm in st.agents else None
+    return bool(role and "role:%s" % role in (x.get("to") or []))
+
+
+def _closed_for(st, mid, ids, roles=()):
+    """0.26.0 (item 10): has a recipient of mail `mid` (any id in `ids`, or a holder of one of `roles`) dismissed it with owed.closed?"""
+    keys = (getattr(st, "owed_closed", None) or {}).get(mid)
+    if not keys:
+        return False
+    rs = {st.role_of(i) for i in ids if i in st.agents} | {r for r in roles if r}
+    return bool(keys & (set(ids) | {"role:%s" % r for r in rs if r}))
+
+
+def owed_closed(st, mid, mine, role):
+    """0.26.0 (item 10): a role (or, with no role, the agent) dismissed this item with owed.closed; task state is untouched."""
+    keys = (getattr(st, "owed_closed", None) or {}).get(mid) or set()
+    return bool(keys & (set(mine) | ({"role:%s" % role} if role else set())))
+
+
 def owed_replies(st, aid, cap=None):
     """Ids of task/question/review mail (or mail marked expects_reply) to this agent that it has not answered yet, oldest first. 0.25.0 (item 30):
-    the ONE owed function: uncapped by default (it was cut to the newest 8, so every caller printed "8"); the digest, the inbox footer and
-    the vault all call it. `cap` keeps the newest n for a caller that wants a short list."""
+    the ONE owed function: uncapped by default; the digest, the inbox footer and the vault all call it. `cap` keeps the newest n.
+    0.26.0 (items 6 to 8, 10): an item clears on an answer (reply_to, or a ref in a result, notice or message to the original sender or its
+    role) from the agent or, for mail addressed to a role, from any holder of that role; a co-recipient's debt also clears when another
+    recipient's result to it completes the task, never on a later message alone; a role's owed.closed dismissal clears it too."""
     mine = _lineage(st, aid)
     role = st.role_of(aid)
     out = []
+    refmap = {}                         # message id -> the later messages that cite it in refs (a ref answers across threads, item 7)
+    for x_ in st.order:
+        for r in st.messages[x_].get("refs") or []:
+            k = str(r).rsplit("/", 1)[-1]
+            if k.startswith("m-"):
+                refmap.setdefault(k, []).append(st.messages[x_])
     for mid in st.order:
         m = st.messages[mid]
         if m["from"] in mine or is_system_sender(m["from"]):
             continue
-        if not (mine & set(m.get("to_resolved", [])) or (role and f"role:{role}" in m["to"])):
+        by_role = bool(role and f"role:{role}" in m["to"])
+        if not (mine & set(m.get("to_resolved", [])) or by_role):
             continue
         if not (m["kind"] in ("task", "question", "review") or m.get("expects_reply")):
             continue
         if (st.tasks.get(mid) or {}).get("state") in TERMINAL:
             continue
-        if any(st.messages[x]["from"] in mine and st.messages[x]["seq"] > m["seq"] for x in st.threads[m["thread"]]["messages"]):
+        if owed_closed(st, mid, mine, role):
+            continue
+        who = set(mine) | (_role_ids(st, role) if by_role else set())
+        # item 8 applies to mail sent to several named recipients; a broadcast ("*" or group:) is everyone's mail, no one's task to complete
+        direct = not any(t == "*" or str(t).startswith("group:") for t in m.get("to") or [])
+        others = set(m.get("to_resolved", [])) - mine if direct and len(m.get("to_resolved", [])) > 1 and not by_role else set()
+        cleared = False
+        for x in st.threads[m["thread"]]["messages"]:
+            x = st.messages[x]
+            if x["seq"] <= m["seq"]:
+                continue
+            if x["from"] in who:
+                cleared = True                  # as in 0.25.0: any later message of the agent on the thread (item 6 adds the role's other holders)
+                break
+            if others and x["from"] in others and x.get("kind") == "result" and x.get("parent") == mid:
+                cleared = True                  # item 8: another recipient's result completes it for the co-recipients
+                break
+        if not cleared:
+            for x in refmap.get(mid, []):       # item 7: a ref to it in a result, notice or message to the sender or its role answers across threads
+                if x["seq"] > m["seq"] and x["from"] in who and _answers(st, x, m, mid):
+                    cleared = True
+                    break
+        if cleared:
             continue
         out.append(mid)
     return out[-cap:] if cap else out
+
+
+def owed_age(st, mid, now=None):
+    """'3d', '5h', '40m' since the mail was sent."""
+    m = st.messages.get(mid) or {}
+    sec = max(0, float(now if now is not None else getattr(st, "now", time.time())) - float(m.get("t") or 0))
+    return "%dd" % (sec // 86400) if sec >= 86400 else "%dh" % (sec // 3600) if sec >= 3600 else "%dm" % (sec // 60)
+
+
+OWED_LINES = 5
+
+
+def owed_order(st, owed):
+    """Raw read F6: what the footer, the digest and the structured field all show first: the operator's own asks (from=human), then the rest,
+    each oldest first, so a fresh operator ask never hides under '+N more'. Round 6 (item 4): the operator's asks are NEWEST first, so the latest
+    directive is always among the lines shown; the rest stay oldest first, and harness_admin op=owed lists every id."""
+    human = [m for m in owed if (st.messages.get(m) or {}).get("from") in ("human", "operator")]
+    return human[::-1] + [m for m in owed if m not in set(human)]
+
+
+def owed_footer(st, owed):
+    """0.26.0 (item 9): the inbox footer: one line per item, oldest first, with its age; items past the cap are one count line that names
+    harness_admin op=owed. Nothing is hidden silently."""
+    if not owed:
+        return ""
+    owed = owed_order(st, owed)
+    lines = ["owed reply %d (operator first, then oldest first):" % len(owed)]
+    for mid in owed[:OWED_LINES]:
+        m = st.messages.get(mid) or {}
+        lines.append("  %s %s %s" % (mid, owed_age(st, mid), m.get("kind") or ""))
+    if len(owed) > OWED_LINES:
+        lines.append("  +%d more (harness_admin op=owed lists every id)" % (len(owed) - OWED_LINES))
+    return "\n" + "\n".join(lines)
 
 
 def open_task(st, aid):
     """Computed from the ledger (never from the agent): non-terminal tasks assigned to this agent's lineage, plus
     task/question/review mail to it that it has not answered. -> (count, [message ids])."""
     mine = _lineage(st, aid)
-    ids = [k for k, tk in st.tasks.items() if mine & set(tk["to"]) and tk.get("state") not in TERMINAL]
     role = st.role_of(aid)
-    for mid in st.order:
-        m = st.messages[mid]
-        if m["from"] in mine or mid in ids:
-            continue
-        if not (mine & set(m.get("to_resolved", [])) or (role and f"role:{role}" in m["to"])):
-            continue
-        if not (m["kind"] in ("question", "review") or m.get("expects_reply")):
-            continue
-        if any(st.messages[x]["from"] in mine and st.messages[x]["seq"] > m["seq"] for x in st.threads[m["thread"]]["messages"]):
-            continue
-        ids.append(mid)
+    ids = [k for k, tk in st.tasks.items() if mine & set(tk["to"]) and tk.get("state") not in TERMINAL and not owed_closed(st, k, mine, role)]
+    for mid in owed_replies(st, aid):        # raw read F5: the mail part is the owed list itself, so /listen never arms on an item a role holder answered
+        if mid not in ids and (st.messages[mid]["kind"] in ("question", "review") or st.messages[mid].get("expects_reply")):
+            ids.append(mid)
     return len(ids), ids[-5:]
 
 
@@ -2236,12 +2797,14 @@ def _answered(st, mid, rid, role=None):
     for a_ in list(st.agents):                    # a successor: an agent whose lineage reaches the recipient
         if a_ not in who and rid in set(st.lineage(a_) or []):
             who.add(a_)
-    if who & set(m.get("read_by") or []):
-        return "read"
-    for x in (st.threads.get(m.get("thread")) or {}).get("messages") or []:
+    for x in (st.threads.get(m.get("thread")) or {}).get("messages") or []:     # 0.26.0 (item 4): a reply is checked first (it also marks the mail read)
         mx = st.messages.get(x) or {}
         if x != mid and mx.get("from") in who and (mx.get("seq") or 0) > (m.get("seq") or 0):
             return "reply"
+    if who & set(m.get("read_by") or []):
+        return "read"
+    if _closed_for(st, mid, who, [role] if role else []):
+        return "closed"
     return None
 
 
@@ -2289,20 +2852,21 @@ def alarm_scan(h, now=None, force=False):
             stamp["armed"] = {"t": ev.get("t", now)}
             armed = stamp["armed"]
         armed_t = float((armed.get("data") or {}).get("t") or armed.get("t") or now) if isinstance(armed, dict) else now
-        alarmed = {(e.get("data") or {}).get("msg_id") for e in evs if e["type"] == "nudge.alarm"}
-        a_closed = {(e.get("data") or {}).get("msg_id") for e in evs if e["type"] == "nudge.alarm_closed"}
+        alarmed = {((e.get("data") or {}).get("msg_id"), (e.get("data") or {}).get("to")) for e in evs if e["type"] == "nudge.alarm"}     # round 7: per (message, recipient)
+        a_closed = {((e.get("data") or {}).get("msg_id"), (e.get("data") or {}).get("to")) for e in evs if e["type"] == "nudge.alarm_closed"}
         for e in evs:                                # 0.25.0 (item 26): an open alarm closes when the addressee answered or read the mail
             d = e.get("data") or {}
-            if e["type"] == "nudge.alarm" and d.get("msg_id") not in a_closed and float(e.get("t") or 0) >= now - 86400:
+            if e["type"] == "nudge.alarm" and (d.get("msg_id"), d.get("to")) not in a_closed and (d.get("msg_id"), None) not in a_closed \
+                    and float(e.get("t") or 0) >= now - 86400:
                 why = _answered(st, d.get("msg_id"), d.get("to"), d.get("role"))
                 if why:
                     try:
-                        h.store.append("nudge.alarm_closed", "system", {"msg_id": d.get("msg_id"), "reason": why})
-                        a_closed.add(d.get("msg_id"))
+                        h.store.append("nudge.alarm_closed", "system", {"msg_id": d.get("msg_id"), "to": d.get("to"), "reason": why})
+                        a_closed.add((d.get("msg_id"), d.get("to")))
                     except Exception:
                         pass
         dead_mids = _dead_relay_mids(h, st, now)
-        results = {(e.get("data") or {}).get("msg_id"): e.get("data") or {} for e in evs if e["type"] == "nudge.result"}
+        results = {(e.get("data") or {}).get("msg_id"): e.get("data") or {} for e in _drop_partial(evs) if e["type"] == "nudge.result"}
         unrep = {(e.get("data") or {}).get("msg_id") for e in evs if e["type"] == "nudge.unreported"}
         role_hour = {}
         for e in evs:
@@ -2317,12 +2881,14 @@ def alarm_scan(h, now=None, force=False):
                 continue
             d = e.get("data") or {}
             mid, sent_t = d.get("msg_id") or d.get("msg"), float(e.get("t") or 0)
-            if not mid or mid in alarmed or mid in dead_mids:
+            if not mid or mid in dead_mids:
                 continue                                 # 0.25.0 (item 22): a dead routine's offer raises no alarm
             m = st.messages.get(mid) or {}
             for i, rid in enumerate(d.get("to") or []):
                 if not (d.get("by_id") or [])[i:i + 1] or not d["by_id"][i]:
                     continue                                 # A1 and A2 apply only when an id Do-line was offered (critic m-fcb579e7e932)
+                if (mid, rid) in alarmed:
+                    continue                                 # one alarm per (message, recipient)
                 a = st.agents.get(rid) or {}
                 if not (a.get("host_session_id") or "").startswith("local_"):
                     continue
@@ -2350,7 +2916,7 @@ def alarm_scan(h, now=None, force=False):
                 data = {"msg_id": mid, "role": role, "to": rid, "from": d.get("from"), "cond": cond, "reason": str(reason)[:120],
                         "age_min": int((now - sent_t) // 60), "suppressed": sup.pop(role, 0)}
                 h.store.append("nudge.alarm", "system", data)
-                alarmed.add(mid)
+                alarmed.add((mid, rid))
                 role_hour[role] = role_hour.get(role, 0) + 1
                 out.append(data)
                 if now - armed_t >= cfg["alarm_mail_after_days"] * 86400:
@@ -2359,7 +2925,6 @@ def alarm_scan(h, now=None, force=False):
                                subject="nudge alarm", kind="notice")
                     except Exception:
                         pass
-                break
         stamp["suppressed_mids"] = sorted(sup_seen)[-500:]
         _save(sp, stamp)
     except Exception:
@@ -2372,11 +2937,11 @@ def alarm_lines(h, st, aid):
     out = []
     try:
         evs_ = _tail(h, needle=b"nudge.alarm")
-        shut = {(e.get("data") or {}).get("msg_id") for e in evs_ if e.get("type") == "nudge.alarm_closed"}
+        shut = {((e.get("data") or {}).get("msg_id"), (e.get("data") or {}).get("to")) for e in evs_ if e.get("type") == "nudge.alarm_closed"}
         for e in evs_:
             d = e.get("data") or {}
             if e.get("type") == "nudge.alarm" and d.get("to") == aid and float(e.get("t") or 0) >= time.time() - 86400 \
-                    and d.get("msg_id") not in shut:
+                    and (d.get("msg_id"), d.get("to")) not in shut and (d.get("msg_id"), None) not in shut:
                 m = st.messages.get(d.get("msg_id")) or {}
                 if aid not in (m.get("read_by") or []):
                     out.append(f"⚠ nudge alarm: {d.get('msg_id')} ({d.get('cond')}) is waiting: harness_inbox")

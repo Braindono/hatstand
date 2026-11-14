@@ -28,7 +28,9 @@ _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _ENTRY = re.compile(r"^[A-Z]-[0-9a-f]{5}$")
 _REF = re.compile(r"^(m-[0-9a-f]{12}|D-[0-9a-f]{5})$")
 _APPROVAL = re.compile(r"^A-[0-9a-f]{5}$")
-ACTIONS = ("retire", "set_project", "retag", "approve", "launchers")
+ACTIONS = ("retire", "set_project", "retag", "approve", "launchers", "release_scope")
+PROMPT_ACTIONS = ("approve", "release_scope")       # 0.26.0 (item 22): every step of these asks the operator for a code
+_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 class ScriptError(ValueError):
@@ -80,6 +82,22 @@ def normalize(action, items, reason=None):
             if it.get("ref"):
                 cmd += ["--ref", _need(_REF, it["ref"], "ref")]
             key, dry = f"retag:{e}:{p}:{it.get('role') or ''}", cmd + ["--dry-run"]
+        elif action == "release_scope":
+            # 0.26.0 (item 23): the script files this scope itself when the operator runs it, then asks for the code in the same step
+            if not isinstance(it, dict):
+                raise ScriptError("operator_script: release_scope items are {plugin, version, items, rationale, approval_ref?}")
+            p_, v_ = _need(_SLUG, it.get("plugin"), "plugin"), _need(_VERSION, it.get("version"), "version")
+            sc = it.get("items")
+            if not isinstance(sc, list) or not 1 <= len(sc) <= 40 or not all(isinstance(x, str) and 3 <= len(x.strip()) <= 200 for x in sc):
+                raise ScriptError("operator_script: release_scope items must be 1-40 strings of 3-200 characters")
+            why = _reason(it.get("rationale") or reason)
+            if not why:
+                raise ScriptError("operator_script: release_scope needs a rationale")
+            cmd = ["release-scope", "--plugin", p_, "--version", v_, "--items", json.dumps([_reason(x) for x in sc], ensure_ascii=False),
+                   "--rationale", why]
+            if it.get("approval_ref"):
+                cmd += ["--approval-ref", _need(_REF, it["approval_ref"], "approval_ref")]
+            key, dry = f"release_scope:{p_}:{v_}", None
         else:   # approve: interactive, the operator types each code
             a = _need(_APPROVAL, it, "approval id")
             key, cmd, dry = f"approve:{a}", ["approve", a], None
@@ -94,8 +112,15 @@ def render(action, steps, harness_py, home, requester, path):
     q = shlex.quote
     base = f'"$PY" "$HP" --home "$HX"'
     L = ["#!/bin/bash", MARKER,
-         f"# action: {action} · steps: {len(steps)} · requested by: {requester}",
-         f"# dry run: bash {q(path)}", f"# apply:   bash {q(path)} apply",
+         f"# action: {action} · steps: {len(steps)} · requested by: {requester}"]
+    prompts = action in PROMPT_ACTIONS
+    if prompts:      # 0.26.0 (item 22): the header lists every prompt in order; each one prints "approval N of M" before it asks
+        L.append(f"# prompts: {len(steps)}, in this order (you type a code at each):")
+        for n, (key, _cmd, _dry) in enumerate(steps, 1):
+            L.append(f"#   {n}. " + key.replace(":", " "))
+    L += [f"# dry run: bash {q(path)}", f"# apply:   bash {q(path)} apply",
+          f"# progress file: {path}.done (a finished step is skipped on a rerun; delete the line, or the file, to run it again,"
+          f" e.g. a scope whose approval lapsed before the publish)",
          "set -u", f"PY={q(PY)}", f"HP={q(harness_py)}", f"HX={q(home)}", f"DONE={q(path + '.done')}",
          'MODE="${1:-dry}"',
          'case "$MODE" in dry|apply) ;; *) echo "usage: bash $0 [apply]"; exit 2;; esac',
@@ -106,9 +131,10 @@ def render(action, steps, harness_py, home, requester, path):
          '  if "$@"; then echo "$k" >> "$DONE"; echo "ok   $k"; ok=$((ok+1)); else echo "FAIL $k"; fail=$((fail+1)); fi; }',
          'show() { k="$1"; shift; if done_already "$k"; then echo "skip $k (done)"; skip=$((skip+1)); else echo "would run: $*"; fi; }',
          'echo "== ' + action + ' ($MODE) =="']
-    for key, cmd, dry in steps:
+    for n, (key, cmd, dry) in enumerate(steps, 1):
         args = " ".join(q(c) for c in cmd)
-        L.append(f'if [ "$MODE" = apply ]; then step {q(key)} {base} {args}; else show {q(key)} {base} {args}'
+        ann = f'done_already {q(key)} || echo "approval {n} of {len(steps)}"; ' if prompts else ""
+        L.append(f'if [ "$MODE" = apply ]; then {ann}step {q(key)} {base} {args}; else show {q(key)} {base} {args}'
                  + (f"; {base} {' '.join(q(c) for c in dry)} || true" if dry else "") + "; fi")
     L += ['echo "mode=$MODE ok=$ok skip=$skip fail=$fail"',
           'if [ "$MODE" = dry ]; then echo "nothing changed; to run: bash $0 apply"; fi',

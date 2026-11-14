@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 (2026-11-13): rules moved to the rule files
+Scope items (verbatim):
+- Retired skills (communication, autonomy, continuity, laconic, index): each body becomes one pointer line to the rule files; descriptions say they hold no rules; their references are removed
+- P-98 (skills/communication): the computer:// link rule is removed; where files go is the CORE rule: send the file or an artifact card, a path only as a secondary note
+- Shared docs (skills/continuity/references/shared-docs.md): moved into the rules folder as a tier-3 file named in INDEX.md; the reference file is removed from the plugin
+- Trimmed skills (delegation, plugins, cv-writing, design-rules): lines repeating CORE.md or a role file are dropped; model tiers and polling follow CORE.md; no record ids; descriptions cite CORE.md
+- Old role names (skills/plugins, continuity): corpus-envoy and corpus-steward become envoy and steward in any line that survives
+- Commands kept (argue, song, swarm): argue and song unchanged; swarm's packet sizes and report length follow CORE.md and delegation; citations point to the rule files; dead paths removed
+- Plugin docs (CHANGELOG.md, README.md, plugin.json): version 0.3.0; the CHANGELOG lists every scope item verbatim and names the retired skills; README says rules moved to CORE.md
+
+Notes:
+- Retired (now one pointer line each): communication, autonomy, continuity, laconic, index. Their rules live in CORE.md and roles/<role>.md; the plugin's reference files for them are removed.
+- Trimmed: delegation (4 lines dropped), plugins (9), cv-writing (2, the filename-prefix line is untouched), design-rules (4). Domain detail that the rules index names stays. Six clauses that the rule files do not carry (release checks, shared-repo adoption, Haiku packets, polished-prose stop, monogram opacity, ATS gap) were kept as one-line detail.
+- /argue and /swarm: citations of retired rules now point to the rule files and the dead Harness_Router path is removed (behaviour unchanged); /swarm reports in chat as CORE.md and the role file allow.
+- delegation: Opus tier replaced by 'only where a role file or his words say so'; Haiku first for mechanical work (CORE.md); a packet over 2 files is split or given to Sonnet.
+- Record ids removed from the skill text; the pointer lines name CORE.md, the role files and INDEX.md.
+- The 'corpus-envoy' and 'corpus-steward' names no longer appear (item 5: the lines that used them were retired or dropped).
+- Uninstalling the retired skills is the operator's later step; this release only turns them into pointers.
+
 ## 0.2.15 (2026-11-13): laconic covers all output
 Scope items (verbatim):
 - Laconic skill (skills/laconic/SKILL.md): all output of envoy, curator, ops-coder, steward; no mail exemption, no work narration; chat to him at most 3 lines; critic, secretary, design-system exempt
