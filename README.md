@@ -1,4 +1,4 @@
-# HATstand
+# HATSTAND
 
 A multi-agent harness for long-lived Claude work: a hash-chained event ledger, a decision corpus, durable roles, an MCP server, and the plugins that carry the protocol.
 
@@ -7,9 +7,9 @@ A multi-agent harness for long-lived Claude work: a hash-chained event ledger, a
 - `.claude-plugin/marketplace.json`: the local marketplace manifest.
 - `docs/harness-technical-overview.md`: what problem this solves, how it works, and what is novel.
 
-## Why HATstand
+## Why HATSTAND
 
-Long coding sessions outgrow a chat. HATstand keeps what matters outside it:
+Long coding sessions outgrow a chat. HATSTAND keeps what matters outside it:
 
 - **Work survives compaction, restarts and new chats.** Decisions and state live in an append-only, hash-chained event log and a decision corpus, not in a chat's memory.
 - **Roles hand off with their state.** A role passes on in a handoff capsule; a fresh chat restores it with its state and its waiting mail, so a multi-hour or overnight build carries on across sessions.
@@ -17,11 +17,11 @@ Long coding sessions outgrow a chat. HATstand keeps what matters outside it:
 - **Releases pass gates.** Publishing needs an ACCEPT from the envoy role naming the package hash, an operator-approved scope that the changelog covers, and a clean run of a release simulator; the crew also runs the full test suite and a ledger replay check before asking for the ACCEPT, as process rather than as code.
 - **One writer per file.** Leases mark one writer per file, and a hook blocks an edit of a file another agent holds.
 
-In practice: a release of HATstand's own server went through five fix rounds over many hours and a change of builder chat, and carried on from the log and the handoff without losing state.
+In practice: a release of HATSTAND's own server went through five fix rounds over many hours and a change of builder chat, and carried on from the log and the handoff without losing state.
 
 ## How it works
 
-HATstand is an MCP server that lets several LLM agents work as a crew on one machine. The name is an acronym: HATSTAND = Handoffs, Archive, Tasks, Stewardship, Trust, Anchors, Notes, Decisions. You give each agent a role. The agents coordinate through the server's tools and never message each other directly.
+HATSTAND is an MCP server that lets several LLM agents work as a crew on one machine. The name is an acronym: HATSTAND = Handoffs, Archive, Tasks, Stewardship, Trust, Anchors, Notes, Decisions. You give each agent a role. The agents coordinate through the server's tools and never message each other directly.
 
 ```mermaid
 flowchart LR
@@ -30,7 +30,7 @@ flowchart LR
     A2["Agent B<br/>role: ops-coder"]
     A3["Agent C<br/>role: critic"]
   end
-  subgraph Server["HATstand MCP server"]
+  subgraph Server["HATSTAND MCP server"]
     T["12 tools<br/>register · restore · handoff<br/>send · inbox · sync<br/>claim · release · commit<br/>record · recall · admin"]
     R["Replay<br/>state folded from the log<br/>incremental cache, no daemon"]
   end
@@ -48,7 +48,7 @@ flowchart LR
 
 ### One log
 
-HATstand keeps a single append-only, hash-chained event log. Each tool call appends an event. The server folds state from the log, caches it incrementally, and rebuilds from the log whenever the cache does not match, so you run no daemon. Run `harness.py verify` to check the chain; it exits with an error on a mismatch.
+HATSTAND keeps a single append-only, hash-chained event log. Each tool call appends an event. The server folds state from the log, caches it incrementally, and rebuilds from the log whenever the cache does not match, so you run no daemon. Run `harness.py verify` to check the chain; it exits with an error on a mismatch.
 
 ### Twelve tools
 
@@ -67,7 +67,7 @@ You address mail to a role. The server resolves the role to its current holder w
 ```mermaid
 sequenceDiagram
   participant A as Agent A (holds role R)
-  participant S as HATstand server
+  participant S as HATSTAND server
   participant L as Event log
   participant B as Agent B (fresh chat)
   A->>S: handoff(role R, capsule up to about 1,500 tokens)
@@ -92,7 +92,7 @@ A lease marks one writer per file. Leases are advisory: a hook denies an edit on
 ```mermaid
 sequenceDiagram
   participant A as Agent A
-  participant S as HATstand server
+  participant S as HATSTAND server
   participant B as Agent B
   A->>S: claim(file)
   S-->>A: lease granted, current version
@@ -133,11 +133,11 @@ flowchart TD
 
 ## The bet
 
-Most agent tooling moves toward larger context windows and memory shared across every chat. HATstand goes the other way. Agents are short-lived on purpose, each role keeps its own memory, and continuity comes from structured handoff.
+Most agent tooling moves toward larger context windows and memory shared across every chat. HATSTAND goes the other way. Agents are short-lived on purpose, each role keeps its own memory, and continuity comes from structured handoff.
 
 ## Research in progress
 
-HATstand is also the test bed for a study of one question: with short-lived agents and memory split by role, how do you show that the system learned from a failure? The working thesis is that an agent has learned when a failure it once made can no longer recur, shown on a held-out test above a measured noise floor.
+HATSTAND is also the test bed for a study of one question: with short-lived agents and memory split by role, how do you show that the system learned from a failure? The working thesis is that an agent has learned when a failure it once made can no longer recur, shown on a held-out test above a measured noise floor.
 
 The study ranks four kinds of evidence, strongest first:
 
