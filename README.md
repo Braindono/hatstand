@@ -1,3 +1,5 @@
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/hatstand-tile-dark.svg"><img src="assets/hatstand-tile-light.svg" width="96" height="96" alt="HATSTAND"></picture>
+
 # HATSTAND
 
 A multi-agent harness for long-lived Claude work: a hash-chained event ledger, a decision corpus, durable roles, an MCP server, and the plugins that carry the protocol.
