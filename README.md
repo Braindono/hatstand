@@ -1,4 +1,4 @@
-<picture><source media="(prefers-color-scheme: dark)" srcset="assets/hatstand-tile-dark.svg"><img src="assets/hatstand-tile-light.svg" width="96" height="96" alt="HATSTAND"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/hatstand-banner-dark.svg"><img src="assets/hatstand-banner-light.svg" width="640" alt="HATSTAND"></picture>
 
 # HATSTAND
 
