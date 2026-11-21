@@ -11,6 +11,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
 import harness as H
+import operator_sign as _opsign
 from corpus import est_tokens
 
 MODEL = "claude-opus-5-5"
@@ -79,7 +80,8 @@ class Lessons(unittest.TestCase):
     def test_operator_seat_gets_only_role_operator_lessons(self):
         self.h.role_define("operator", "operator", "harness-ops")
         op = self.h.register(project="harness-ops", model=MODEL)["id"]
-        self.h.role_assign("operator", "operator", op)
+        with _opsign.human_ctx():      # stands in for the signed path
+            self.h.role_assign("operator", "operator", op)
         self.ids["operator"] = op
         a = self.lesson("curator", "agent conduct", "agents only")
         b = self.lesson("curator", "for the seat", "operator rule", roles=("operator",))

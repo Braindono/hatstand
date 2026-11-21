@@ -183,7 +183,7 @@ def start(h, project, by, apply=False, scheduled=False):
                              "restore_questions_sha": rq_sha, "scheduled": bool(scheduled)})
     if scheduled:    # a scheduled run is a report only, filed to the envoy as a notice with the path
         try:
-            h.send(aid if aid != "human" else "operator", "role:envoy", f"/compress dry-run report {run}: {os.path.join(d, 'report.json')}",
+            h.send(aid if aid not in ("human", "operator") else "system", "role:envoy", f"/compress dry-run report {run}: {os.path.join(d, 'report.json')}",
                    subject=f"compress report {project}", kind="notice")
         except Exception:
             pass

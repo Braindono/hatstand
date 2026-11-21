@@ -22,6 +22,15 @@ if not os.environ.get("CC_TEST_ISOLATED"):
     os.chmod(os.path.join(_cfg, "operator.json"), 0o600)
     atexit.register(shutil.rmtree, _root, True)
 
+# 0.26.2: the signed-operator gate reads root files at fixed paths; on a machine where the seat is installed that would switch the gate on
+# inside every test. In-process tests get the root-log paths moved to a private empty folder (the operator tests move them again).
+if os.environ.get("CC_TEST_ISOLATED") and "operator_sign" not in __import__("sys").modules:
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+    import operator_sign as _OS
+    _none = os.path.join(os.environ["CC_TEST_ISOLATED"], "no-root")
+    _OS.LOG, _OS.PUB, _OS.FLAG = (os.path.join(_none, "log"), os.path.join(_none, "pub"), os.path.join(_none, "off"))
+
 REAL_HOME_UNTOUCHED = os.environ["HOME"] == os.environ.get("CC_TEST_ISOLATED")
 
 

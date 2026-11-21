@@ -13,6 +13,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
 import harness as H
+import operator_sign as _opsign
 import mcp_server as M
 from corpus import est_tokens
 
@@ -35,7 +36,8 @@ class Base(unittest.TestCase):
         for role in ROLES:
             self.h.role_define("operator", role, "harness-ops")
             a = self.h.register(project="harness-ops", model=MODEL)["id"]
-            self.h.role_assign("operator", role, a)
+            with _opsign.human_ctx():      # the operator seat is assigned only through the signed path; the test stands in for it
+                self.h.role_assign("operator", role, a)
             self.ids[role] = a
 
     def lesson(self, by, what, rule, roles=("all",), body=None, extra=""):
@@ -144,7 +146,8 @@ class Matrix(Base):
     def test_operator_seat_gets_only_role_operator_lessons(self):
         self.h.role_define("operator", "operator", "harness-ops")
         op = self.h.register(project="harness-ops", model=MODEL)["id"]
-        self.h.role_assign("operator", "operator", op)
+        with _opsign.human_ctx():      # stands in for the signed path
+            self.h.role_assign("operator", "operator", op)
         self.ids["operator"] = op
         a = self.lesson("curator", "agent conduct", "agents only")
         b = self.lesson("curator", "for the seat", "operator rule", roles=("operator",))

@@ -91,6 +91,9 @@ class RetagGate(HarnessError):
     """0.15.5 (WP3): the caller has no retag authority; the op layer turns this into an approval request."""
 
 
+import operator_sign as _opsign
+import seat_guard as _seat
+import restore_model_warn as _model_warn
 from corpus import clean_text as _clean_text   # 0.15.0: untrusted-text hygiene (control chars out, length capped)
 BODY_MAX = 20000       # message body, chars (clear error above this)
 MAX_HOPS_CAP = 10      # per-thread loop guard ceiling a caller may ask for
@@ -178,7 +181,8 @@ def role_alias_table():
             global _LABEL_REMAP_FROM
             _LABEL_REMAP_FROM = str(j.get("label_remap_from") or "")
             for k, v in (j.get("aliases") or {}).items():
-                if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip():
+                if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip() \
+                        and "operator" not in (k.strip().lower(), v.strip().lower()):   # the seat has no alias: the file is user-writable
                     out[k.strip().lower()] = v.strip().lower()
         except Exception:
             pass
@@ -1259,6 +1263,8 @@ class FileStore:
     def append(self, etype: str, actor: str, data: dict, precheck=None) -> dict:
         """precheck (0.18.0, R-098): called under the lock before the write as precheck(store); it raises to refuse
         the event, so a check and its write can't be split by another writer."""
+        if _opsign._MAP.enforced(etype, actor, data) and _opsign.gate_on() and not _opsign.in_ctx():
+            raise HarnessError("operator acts need his signature at Terminal.app; run `harness.py approve <id>` or `operator-auth` for the commands")
         with self._lock():
             rep = self._repair_tail()
             if rep:
@@ -1513,6 +1519,7 @@ class State:
         self.last_seq = 0
         self.last_hash = GENESIS
         self.corrupt = 0
+        self.ignored_human = []   # seqs of human events root never signed (ignored at replay)
         self.skipped = []       # 0.14.6 (A7): seqs of malformed events that were skipped, never fatal
         self.extend(events)
 
@@ -1586,6 +1593,9 @@ class State:
             return
         self.last_seq = ev["seq"]
         self.last_hash = ev["hash"]
+        if not _opsign.human_ok(ev):    # signed-operator gate: an event with operator effect that root never consumed, any actor
+            self.ignored_human.append(ev["seq"])
+            return
         t, d, typ, actor = ev["t"], ev["data"], ev["type"], ev["actor"]
         via = ev.get("via") or {}
         self._touch(actor, t)
@@ -2786,6 +2796,9 @@ class Harness:
         so the result always equals State(read_all()). HARNESS_STATE_CACHE=0 turns it off."""
         if os.environ.get("HARNESS_STATE_CACHE") == "0":
             return State(self.store.read_all())
+        gm_ = _opsign.log_mark()          # a new root-log record (a consumed grant) changes which human events count
+        if gm_ != getattr(self, "_gm", None):
+            self._sc, self._gm = None, gm_
         try:
             return self._state_cached()
         except Exception:
@@ -2875,6 +2888,11 @@ class Harness:
                 for w in norm_name(a["sobriquet"]).split()}
         sob = make_sobriquet(aid, taken, busy)
         role = cr_input((role or "").strip()) or None
+        try:
+            _seat.refuse_if_seat(role, task, st.role_of(pred["id"]) if pred else None,
+                                 holder_ok=bool(getattr(self, "_seat_allowed", False)))
+        except ValueError as e:
+            raise HarnessError(str(e))
         asked = (project or "").strip()
         project = asked or ((pred or {}).get("project") or "").strip() \
             or ((st.roles.get(role) or {}).get("project") or "").strip() \
@@ -2979,6 +2997,13 @@ class Harness:
                                       {"path": path, "lease_id": L["lease_id"], "from": pred["id"], "to": aid})
         st = self.state()
         card = self.card(st, aid)
+        try:    # one line first when the chat's model differs from the role's chosen model (warn only)
+            ml_ = _model_warn.model_line(st.role_of(aid), model)
+        except Exception:
+            ml_ = ""
+        if ml_:
+            card["banner"] = ml_ + "\n" + card["banner"]
+            card["model_warning"] = ml_
         rs_ = (pred or {}).get("host_session_id")
         if rs_ and rs_ != data["host_session_id"]:   # 0.19.0 (D-b751f b): the desktop chat the new chat should archive
             card["retire_session"] = rs_
@@ -3317,6 +3342,8 @@ class Harness:
         if target and vacate:
             raise HarnessError("role_assign: target and vacate are exclusive")
         role = cr_input(role)
+        if _seat.is_seat(role) and target and not _opsign.in_ctx():
+            raise HarnessError("the operator seat is assigned only through a signed act: " + _seat.REFUSAL)
         st = self.state()
         if role not in st.roles:
             raise HarnessError(f"unknown role '{role}'; role_define it first")
@@ -3404,7 +3431,7 @@ class Harness:
         for t in to:
             if t in ("*", "all", "broadcast"):
                 labels.append("*")
-                resolved += [a["id"] for a in st.agents.values() if a["status"] in ("active", "idle")]
+                resolved += _seat.exclude_seat([a["id"] for a in st.agents.values() if a["status"] in ("active", "idle")], st)   # the operator seat never gets broadcasts
             elif t.startswith("group:"):
                 labels.append(t)
                 resolved += list(st.groups.get(t[6:], set()))
@@ -3845,6 +3872,8 @@ class Harness:
         mine = set(st.lineage(aid))
         groups = set(st.agents[aid]["groups"])
         role = st.role_of(aid)
+        if _seat.is_seat(role):
+            broadcast = False       # the operator seat reads "*" broadcasts through the Hub, not its inbox
         ids = []
         for mid in st.order:
             m = st.messages[mid]
@@ -7432,7 +7461,7 @@ class Harness:
             self.store.append("release.drift", "system", {"code_sha": code, "root": portable_source_path(root)})
             out["new"] = True
             try:
-                self.send("operator", ["role:curator", "role:envoy"], f"drift: the harness runs code {code[:12]}, which no publish or "
+                self.send(SYSTEM_SENDER, ["role:curator", "role:envoy"], f"drift: the harness runs code {code[:12]}, which no publish or "
                           f"gate pass produced ({portable_source_path(root)}). Explain with harness_admin op=drift_explain "
                           f"args={{code_sha:\"{code[:12]}\",reason}}; until then publish refuses.", subject="harness drift", kind="notice")
             except Exception:
@@ -7644,7 +7673,7 @@ class Harness:
         try:   # 0.14.7 (C): one notice to every live agent; the version is on disk, loading needs a reload
             peers = [a["id"] for a in live_peers(self.state(), None, load_config(self.home).get("fleet_window_h", 12))]
             if peers:   # one line, only agents seen within fleet_window_h (not group:all)
-                self.send(actor if actor != "human" else "operator", peers, f"{name_} {ver} published, reload to load",
+                self.send(actor if actor not in ("human", "operator") else SYSTEM_SENDER, peers, f"{name_} {ver} published, reload to load",
                           subject=f"{name_} {ver} published", kind="notice")
             out["notice"] = "sent" if peers else "no live agents"
         except Exception as e:
@@ -9783,12 +9812,26 @@ def hook(event: str):
 # CLI
 # --------------------------------------------------------------------------
 
+def _file_approval_request(h, aid, rec=None):
+    rec = rec or h._approval_records().get(aid)
+    if not rec or rec["state"] != "pending":
+        raise HarnessError(f"{aid}: not found or not pending")
+    rid, _p, _s = _opsign.request_file(h.home, "approve", [{"type": "approval.granted", "data": {
+        "id": aid, "channel": "cli-tty", "by": "operator", "state": "granted", "args_digest": rec["args_digest"]}}],
+        requester=str(rec.get("caller"))[:8])
+    return rid
+
+
 def cli_approve(h, aid):
     """The interactive step of the CLI: show the stored request and its digest, ask for the first 4 characters, run it once. Terminal only (the
     callers check). 0.26.0 (item 23): shared by the approve command and release-scope."""
     rec = h._approval_records().get(aid)
     if not rec or rec["state"] != "pending":
         raise HarnessError(f"{aid}: not found or not pending")
+    if _opsign.gate_on():     # signed-operator gate: he signs at the root helper; this command only files the request
+        rid = _file_approval_request(h, aid, rec)
+        print(_opsign.commands_text(rid))
+        return {"text": "request filed; sign it with the commands above"}
     chg = h.approval_change(rec["action"], rec.get("args"))
     if chg:
         print(f"{aid} {chg}")
@@ -9910,6 +9953,10 @@ def main(argv=None):
     s.add_argument("--scheduled", action="store_true", help="start: report-only dry run filed to envoy")
     s = sub.add_parser("export"); s.add_argument("--out")
     sub.add_parser("pending", help="0.15.1: approval requests agents have filed (digest shown; the code is its first 4 hex)")
+    s = sub.add_parser("apply", help="apply a request he signed at the root helper"); s.add_argument("id")
+    s = sub.add_parser("apply-all", help="0.26.2: run by the root signer as his uid: apply the requests he signed; --file-only files consumed ones away")
+    s.add_argument("--file-only", action="store_true")
+    s = sub.add_parser("operator-auth", help="print the commands he types at Terminal.app to sign an operator act")
     s = sub.add_parser("approve", help="0.15.1: run an approval request once (interactive terminal only)"); s.add_argument("id")
     s = sub.add_parser("deny", help="0.15.1: deny an approval request"); s.add_argument("id")
     s = sub.add_parser("release-scope", help="0.26.0: file a release scope request as the operator and approve it in one interactive step (the release script runs this)")
@@ -10001,7 +10048,20 @@ def main(argv=None):
         elif c == "role-define":
             r = h.role_define("operator", a.role, a.project, a.owns, a.partner, a.carry, a.desc, a.name)
         elif c == "role-assign":
+            if _opsign.gate_on() and not _opsign.in_ctx():
+                if a.vacate or not a.target:
+                    raise HarnessError("signed vacate is not built yet; nothing was done")
+                _aid = h.resolve(h.state(), a.target)
+                rid, _p, _s = _opsign.request_file(h.home, "role_assign", _opsign.role_assign_events(h, cr_input(a.role), _aid))
+                print(_opsign.commands_text(rid))
+                return 0
             r = h.role_assign("operator", a.role, a.target, vacate=a.vacate)
+        elif c == "apply":
+            r = _opsign.apply(h, a.id)
+        elif c == "apply-all":
+            r = {"applied": _opsign.apply_all(h, file_only=a.file_only)}
+        elif c == "operator-auth":
+            r = {"text": _opsign.commands_text("<request id from the gated command>")}
         elif c == "set-project":
             r = h.set_project(a.target, a.project, by=a.agent)
         elif c == "update":

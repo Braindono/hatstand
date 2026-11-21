@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.26.2: operator signing in one line
+- His one line, constant: `sudo -k; sudo /usr/local/libexec/harness-grant approve; sudo -k`. One sudo password (sudo -k makes it fresh), then the root signer lists every live pending request in full ("N requests, M events"), asks one 4-hex code typed on the sudo tty, signs each request (single-use), applies as his uid (`harness.py apply-all`, clean environment) and records the consume itself by matching ledger digests. No ids and no script path on his line; `harness.py approve` and `role-assign` only say a request is waiting.
+- The helper no longer has `grant`, `sign-pending` or `consume` commands (their functions stay for tests). Applied requests move to operator-pending/done/ and leave the list (pending means: not yet consumed in the root log).
+- Seat setup also refuses `!tty_tickets` and `timestamp_timeout` above 5 minutes or negative. The tests no longer read the machine's installed root log.
+- Event map and verifier unchanged.
+- The setup script also installs one sudoers drop-in, `/etc/sudoers.d/harness-grant`: `Defaults!/usr/local/libexec/harness-grant !use_pty` (sudo's default use_pty put the signer's stdin on sudo's own pty). Checked with visudo before install, mode 0440, refuses if sudoers does not include sudoers.d; undo `sudo rm /etc/sudoers.d/harness-grant`.
+- Fix before publish: the signer opens the terminal device sudo ran on (SUDO_TTY) itself and reads the code from it; the first build compared the /dev/tty alias and refused on a real terminal. Refuses unless it is a /dev/ttys* device owned by him and stdin is that terminal.
+
+## 0.26.1: operator seat, human-only and signed
+- Agents can no longer restore, register or succeed the operator seat; "*" broadcasts skip the seat; the first banner line warns when the chat's model differs from the role's choice.
+- Root-owned helper (password check by root, shows the whole action, one random code, single-use signed grant), event map, verifier and a one-time setup script. Enforced kinds at cutover, whatever the actor field says: a granted approval, the operator role assigned or defined, a message written as the operator.
+- Open gaps (keep today's behaviour until they can be signed): deny, release scope, retag, pin, archive, lesson curation events, case grants, flag release, gate override, wake pin, sync, message as operator (refused after cutover: no signed kind yet), signed vacate of the seat. Approvals that write extra events: only the granted approval is signed. The dashboard approve button has no UI change (the append gate refuses an unsigned grant).
+- A new role name's self-claim is ignored after the cutover until the root helper's map is reinstalled. Known roles at the cutover (24): automations, claude-code, corpus-envoy, corpus-steward, critic, curator, design-coder, design-system, detective, dreamer, envoy, guru, harness-critic, letters-manager, listings-manager, ops-coder, proctor, research-lead, researcher, resume-manager, secretary, skill-curation-lead, steward, thinker.
+- Verify cost grows with the grant log (one openssl call per record); fine at today's size.
+
 ## 0.26.0: rules-fix part 1 (ladder out, owed footer, quieter output, hotfix flag, observe hooks)
 Scope items (verbatim):
 - Prefs lookup (scripts/harness.py): the preferences file resolves from the canonical-slug folder, then alias folders; config is ignored; two files give a warn line; never newest by mtime

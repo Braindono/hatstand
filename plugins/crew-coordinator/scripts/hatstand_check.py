@@ -453,7 +453,7 @@ def send_task(home, problems, harness_scripts=None):
     h = H.Harness()
     body = ("The daily Hatstand check found %d problem(s); nothing was changed. Fix them, then confirm the next daily run is "
             "clean.\n" % len(problems)) + "\n".join("- " + p for p in problems[:40])
-    r = h.send("operator", ["role:curator", "role:envoy"], body, subject="Hatstand daily check: %d problem(s)" % len(problems),
+    r = h.send(H.SYSTEM_SENDER, ["role:curator", "role:envoy"], body, subject="Hatstand daily check: %d problem(s)" % len(problems),
                kind="task")
     return (r or {}).get("id") if isinstance(r, dict) else r
 
