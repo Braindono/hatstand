@@ -190,7 +190,7 @@ class Ids(C.Base):
         self.assertEqual(hashlib.sha256(open(p, "rb").read()).hexdigest()[:12], HOOKS_JSON_023)
 
 
-HOOKS_JSON_023 = "7494dbe76fd2"   # sha256 first 12 of hooks/hooks.json: v0.23.0 e30459bce78a; 0.25.0 93642c97f444 (items 18, 27a, 32); 0.26.0 adds the virtue hook (item 20)
+HOOKS_JSON_023 = "43cbd3620e41"   # sha256 first 12 of hooks/hooks.json: v0.23.0 e30459bce78a; 0.25.0 93642c97f444 (items 18, 27a, 32); 0.26.0 adds the virtue hook (item 20); 0.27.1 adds the mistake pointer hook and the correction hook
 
 
 if __name__ == "__main__":

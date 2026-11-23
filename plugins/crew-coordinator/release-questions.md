@@ -104,7 +104,7 @@ Answer: reexec (1 line) calls h.measure_flush() before the server.stopped event 
 
 ## Q-e8a35681 gate: hooks/hooks.json
 Gate file changed: hooks/hooks.json. How does the installed simulator still catch a bad tree with this change?
-Answer: hooks/hooks.json gains exactly one entry: a UserPromptSubmit command running ctx_hook.py virtue (timeout 10); no other hook is touched. The installed simulator still catches a bad tree through its own checks run on the scratch copy (setup, I1 to I9, including I7 with hooks/hooks.json allowed because the CHANGELOG names it as a gate file) and because test_guard_hooks_json_unchanged was re-pinned on purpose to sha 7494dbe76fd2; release_sim.py and the other sim files are not in the diff.
+Answer: hooks/hooks.json gains two entries for 0.27.1: a PreToolUse command mistake_pointer_hook.py on mcp__.*harness_record (timeout 5) and a UserPromptSubmit command correction_hook.py (timeout 5); no existing hook is touched. The installed simulator still catches a bad tree through its own checks on the scratch copy (setup, I1 to I9 including the critic's I7 with its gate-file rule I7c, which fails unless a scope item names hooks/hooks.json: the 0.27.1 scope does).
 
 ## Q-110bb1ae gate: scripts/harness.py::publish_release
 Gate function changed: scripts/harness.py::publish_release. How does the installed simulator still catch a bad tree?
@@ -205,3 +205,55 @@ Answer: relay.closed (reason read) now carries `to`, the recipient who read, so 
 
 ## Q-5cb5398f event: scripts/doorbell.py::relay_expire#2dbc14a2
 Answer: relay.closed (reason read or expired) now carries `to`; the nudge.miss relay_expired write is unchanged, and the already-closed test and the done-set are per (message, recipient) via _closed_pairs, with `extra` offers also expired. Readers: _closed_pairs, _done in claim_relay and relay_expire, the _once precheck, relay_notice_lines, and weekly_report (counts nudge.miss). docs/EVENTS.md is current: the `relay.closed` row covers `to?`, reasons read, trigger_dead and expired, and the nudge.miss row covers relay_expired.
+
+## Q-76e9af93 doline: scripts/doorbell.py::<module>#9b08748e
+Do-line text changed in scripts/doorbell.py::<module> (1 line(s)). Which sender acts on it, and what if that sender lacks the tool it names?
+Answer: The changed line is the module constant TRIGGER_DO_LINES = False, not text a sender receives. No sender acts on it; its effect is that no RemoteTrigger Do-line is built, so a sender without the RemoteTrigger tool is no longer asked to skip anything.
+
+## Q-c04d5476 doline: scripts/doorbell.py::rewake_relay_line#ec36bb9d
+Do-line text changed in scripts/doorbell.py::rewake_relay_line (4 line(s)). Which sender acts on it, and what if that sender lacks the tool it names?
+Answer: The relay holder that claim_relay or the rewake claim hands the line to (a live local relay role). With the flag off, the two RemoteTrigger forms return None and only the SendMessage forms (which name a local_ session) are returned, text unchanged; a holder without SendMessage reports skipped no_sendmessage as before. The offer is spent without a line; its mail waits in the inbox.
+
+## Q-21fec34f doline: scripts/doorbell.py::wake_do#010d42ff
+Do-line text changed in scripts/doorbell.py::wake_do (2 line(s)). Which sender acts on it, and what if that sender lacks the tool it names?
+Answer: wake_do (verify and disable Do-lines for a wake routine) now returns None at its top while the flag is off, so no holder is handed a RemoteTrigger verify or disable line; the caller already treats None as no line. A holder without the tool no longer has to skip.
+
+## Q-778ee9a4 doline: scripts/harness.py::sync#9ba3906e
+Do-line text changed in scripts/harness.py::sync (4 line(s)). Which sender acts on it, and what if that sender lacks the tool it names?
+Answer: No Do-line text changes in sync: the four added lines are a try block that calls ingest_mistake_spool and swallows any error. The Do-lines sync prints are unchanged, and fewer of them appear because wake_do returns None.
+
+## Q-6c8169f9 event: scripts/doorbell.py::wake_do#010d42ff
+store.append( call, or a function that holds one, changed in scripts/doorbell.py::wake_do (2 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: No event shape changes: the early return only skips the existing wake.claim append, which is now unreachable while the flag is off. Readers of wake.claim (wake_do itself, the relay views) see no new claims. There is no docs/EVENTS.md change to make.
+
+## Q-9b0976e0 event: scripts/harness.py::sync#9ba3906e
+store.append( call, or a function that holds one, changed in scripts/harness.py::sync (4 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: The new try block calls ingest_mistake_spool, which files candidate records through the existing _record writer (note entries tagged mistake, hindsight, candidate); no new event type or field. Readers: harness_recall, the guru's weekly verifier, the corpus index. docs/EVENTS.md is unaffected.
+
+## Q-c7e4e983 hook: PreToolUse::mcp__.*harness_record::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mistake_pointer_hook.py"
+Hook changed: PreToolUse matcher 'mcp__.*harness_record'. Which tool calls does it now see, and what if it fails?
+Answer: It sees every harness_record call from any chat (the matcher ends in harness_record) and reads only tool_input.agent and transcript_path. It saves the transcript path and last line under the agent's 8-hex id. It is fail-open: any error or the 5 s timeout lets the call through with no output; the record is then filed with the pointer lines saying unavailable.
+
+## Q-c47f4119 hook: UserPromptSubmit::::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/correction_hook.py"
+Hook changed: UserPromptSubmit matcher ''. Which tool calls does it now see, and what if it fails?
+Answer: It sees every prompt he sends in any chat (empty matcher; it is not a tool call). Only on a correction cue it appends one spool line and prints one context line telling the agent a candidate was filed. Any error, a symlinked spool or the 5 s timeout exits 0 with no output: the prompt always proceeds and nothing is filed.
+
+## Q-15ddd425 write: scripts/correction_hook.py::run#77fc2d3b
+File write changed in scripts/correction_hook.py::run (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It creates one mark file per correction under <home>/_harness/mistake_seen/ (exclusive create, no symlink follow, mode 0600) and appends to <home>/_harness/mistake_spool.jsonl. Existing spool lines are never rewritten; an existing mark file means the correction was already filed and nothing is written; a symlink is refused.
+
+## Q-e966ce4b write: scripts/mistake_ingest.py::ingest#1db3064d
+File write changed in scripts/mistake_ingest.py::ingest (3 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: At sync it renames mistake_spool.jsonl to mistake_spool.claimed (atomic), appends unresolved lines back to the spool, appends filed lines to mistake_spool.done.jsonl and refused ones to mistake_spool.rejected.jsonl, creates mistake_seen/<key>.filed (exclusive), and removes the claimed file at the end. Nothing is overwritten: appends only, symlinks refused, a leftover .claimed file from a crash is processed first.
+
+## Q-d67a9381 write: scripts/mistake_record.py::_safe_dir#8323d930
+File write changed in scripts/mistake_record.py::_safe_dir (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It creates the folder <home>/_harness/mistake-pointers if missing (makedirs, exist_ok) and refuses if that path is a symlink. An existing folder and its files are left as they are.
+
+## Q-c2601825 write: scripts/mistake_record.py::save_pointer#eb3d04a2
+File write changed in scripts/mistake_record.py::save_pointer (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It writes <home>/_harness/mistake-pointers/<8-hex agent id>.json through an exclusive, no-follow temp file (mode 0600) and os.replace, so only that agent's own pointer file is replaced (a symlink at the final name is replaced, never followed). Only a lowercase hex agent id of 8 or more characters is accepted. Other files in the folder are untouched; a crash can leave one small .tmp file.
+
+## Q-8985ecfe write: scripts/open_questions.py::_seen_locked#6a980903
+File write changed in scripts/open_questions.py::_seen_locked (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It rewrites <home>/_harness/open_questions.jsonl (key terms of recent questions, never the question text) through an exclusive no-follow temp file and os.replace under a flock on open_questions.jsonl.lock. The file belongs to this feature; rows that are not valid (bad time, not an object) are dropped on the rewrite; a symlink at the name is not read and is replaced, never followed.

@@ -54,6 +54,8 @@ class Hook(unittest.TestCase):
     def setUp(self):
         self.home = os.path.join(tempfile.mkdtemp(), "h")
         os.makedirs(os.path.join(self.home, "_harness"))
+        with open(os.path.join(self.home, "_harness", "config.json"), "w") as f_:
+            json.dump({"idcheck_observe_until": "2099-01-01"}, f_)       # 0.27.1: the built-in observe period ended 2026-11-20
         self.st = tempfile.mkdtemp()
         self.h = H.Harness(self.home)
         self.h.role_define("operator", "ops-coder", "harness-ops", carry="none")

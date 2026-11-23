@@ -112,5 +112,22 @@ class Hook(unittest.TestCase):
         self.assertEqual(len(self.h.store.read_all()), n)
 
 
+class UndoBeside(unittest.TestCase):
+    """0.27.1 (guru row E): an undo line inside the copy block next to a command is flagged; undo in prose or a block of its own is not."""
+    def test_flagged_and_quiet_cases(self):
+        import onecmd as O
+        mixed = "Run:\n```bash\nsudo bash /x/y.sh\n# Undo: sudo rm /etc/z\n```\n"
+        self.assertEqual(O.check("envoy", mixed)[1], 1)
+        self.assertIn("Details", O.check("envoy", mixed)[0])
+        self.assertIsNone(O.check("envoy", "```bash\nsudo bash /x/y.sh\n```\nUndo: sudo rm /etc/z"))
+        self.assertIsNone(O.check("envoy", "```bash\n# Undo: sudo rm /etc/z\n```"))
+        self.assertIsNone(O.check("secretary", mixed))
+        for t in ("```bash\nrm -rf x  # undo: restore from backup\n```", "```\nsudo bash a.sh\n# to undo run: sudo rm b\n```", "```sh\nrun it\n# revert: git checkout x\n```",
+                  "```zsh\ndo\n# rollback: undo it\n```"):
+            self.assertEqual(O.check("envoy", t)[1], 1, t)
+        self.assertIsNone(O.check("envoy", "```bash\nundo=1\nls\n```"))               # a variable name is not an undo line
+        self.assertIsNone(O.check("envoy", "```\nplain text, not a command\n```"))
+
+
 if __name__ == "__main__":
     unittest.main()

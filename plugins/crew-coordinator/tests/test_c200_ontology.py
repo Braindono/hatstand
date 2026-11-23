@@ -78,8 +78,8 @@ class Base(unittest.TestCase):
 
 
 class Item1Data(unittest.TestCase):
-    def test_the_package_ships_98_generic_concepts_9_facets_and_no_mapping(self):
-        self.assertEqual((len(O.concepts), len(O.facets), len(O.mapping), len(O.local_ids)), (98, 9, 0, 0))
+    def test_the_package_ships_103_generic_concepts_9_facets_and_no_mapping(self):
+        self.assertEqual((len(O.concepts), len(O.facets), len(O.mapping), len(O.local_ids)), (103, 9, 0, 0))
         self.assertTrue(all(p in O.concepts for c in O.concepts.values() for p in c["broader"]))          # no dangling parent
         raw = json.load(open(os.path.join(HERE, "..", "data", "ontology.json"), encoding="utf-8"))
         self.assertFalse(set(raw) & {"mapping", "omitted_legacy_tags", "built_from"})                    # item 8: the package never carries them
@@ -90,15 +90,15 @@ class Item1Data(unittest.TestCase):
         self.addCleanup(shutil.rmtree, home, True)
         extra = [{"id": "proj.local-one", "label": "local-one", "facet": "project", "broader": [], "aliases": []},
                  {"id": "proj.local-two", "label": "local-two", "facet": "project", "broader": ["proj.local-one"], "aliases": []}]
-        self.assertEqual(len(ON.load(home=home).concepts), 98)                                             # no file yet: the package alone
+        self.assertEqual(len(ON.load(home=home).concepts), 103)                                             # no file yet: the package alone
         write_local(home, SYNTH_MAPPING, extra)
         o = ON.load(home=home)
-        self.assertEqual((len(o.concepts), len(o.mapping), sorted(o.local_ids)), (100, 4, ["proj.local-one", "proj.local-two"]))
+        self.assertEqual((len(o.concepts), len(o.mapping), sorted(o.local_ids)), (105, 4, ["proj.local-one", "proj.local-two"]))
         self.assertIn("proj.local-two", o.narrower("proj.local-one"))                                      # a local child under a local parent
         self.assertTrue(all(c in o.concepts for e in o.mapping.values() for c, _ in e.get("c", [])))      # no dangling link
         self.assertEqual({r for e in o.mapping.values() for _, r in e.get("c", [])}, set(ON.LINK_ROLES))
         self.assertEqual(ON.load().mapping, {})                                                            # the shared default is unchanged
-        self.assertEqual(len(ON.load().concepts), 98)
+        self.assertEqual(len(ON.load().concepts), 103)
 
     def test_a_local_concept_cannot_replace_a_packaged_one(self):
         home = tempfile.mkdtemp()
@@ -114,7 +114,7 @@ class Item1Data(unittest.TestCase):
         open(p, "w").write("{broken")
         os.utime(p, (time.time() + 5, time.time() + 5))                                                    # a newer mtime busts the cache
         o = ON.load(home=home)
-        self.assertEqual((len(o.concepts), len(o.mapping)), (98, 0))                                       # legacy tags read as new again
+        self.assertEqual((len(o.concepts), len(o.mapping)), (103, 0))                                       # legacy tags read as new again
 
     def test_without_the_local_file_legacy_tags_read_as_new_and_with_it_as_known(self):
         home = tempfile.mkdtemp()

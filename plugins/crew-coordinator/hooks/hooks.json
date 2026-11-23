@@ -67,6 +67,16 @@
         ]
       },
       {
+        "matcher": "mcp__.*harness_record",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/mistake_pointer_hook.py\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "AskUserQuestion|mcp__.*AskUserQuestion|SendUserMessage|mcp__.*SendUserMessage|mcp__.*harness_send",
         "hooks": [
           {
@@ -152,6 +162,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/auto_lookup.py\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/correction_hook.py\"",
             "timeout": 5
           },
           {

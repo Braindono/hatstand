@@ -88,7 +88,7 @@ class Rename(unittest.TestCase):
 
     def test_old_name_refused_after_overlap(self):
         self.h.role_define("operator", "envoy", "orchestration")
-        with mock.patch("time.strftime", return_value="2027-01-01"):
+        with mock.patch.object(H, "alias_today", return_value="2027-01-01"):
             with self.assertRaisesRegex(H.HarnessError, "renamed to 'envoy'"):
                 self.h.register(project="orchestration", model=MODEL, role="corpus-envoy")
 

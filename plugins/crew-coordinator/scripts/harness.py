@@ -198,12 +198,17 @@ def cr(name):
     return role_alias_table()[0].get(name.strip().lower(), name)
 
 
+def alias_today():
+    """Today as the role-alias overlap sees it. One function so the test runner can pin the date (tests/_env.py): the older suites use the old role names."""
+    return time.strftime("%Y-%m-%d")
+
+
 def cr_input(name):
     """cr() for a name typed by an agent: after the overlap ends the old name is refused, pointing at the new one."""
     new = cr(name)
     if isinstance(name, str) and new != name:
         until = role_alias_table()[1]
-        if until and time.strftime("%Y-%m-%d") > until:
+        if until and alias_today() > until:
             raise HarnessError(f"role '{name}' was renamed to '{new}' (the alias ended {until}); use {new}")
     return new
 
@@ -4463,7 +4468,7 @@ class Harness:
         return r
 
     def _record(self, agent, kind, title, body="", tags=None, project=None, refs=None, supersedes=None, offload=False,
-                role=None, tier=None, _approved=False, tag_check=False):
+                role=None, tier=None, _approved=False, tag_check=False, _candidate=False):
         """tag_check (0.20.0): the agent-facing tools (harness_record, the CLI) pass True; the harness's own writers (compress, imports,
         seeds) record their fixed tags unchecked."""
         st = self.state()
@@ -4485,6 +4490,14 @@ class Harness:
             raise HarnessError("record: tier foundation needs the envoy as author")
         model = (st.agents.get(aid) or {}).get("model") or "unknown"
         hints = self._tag_check(tags) if tag_check else []    # 0.20.0 (A-2b70b item 3): a spelling variant of a known tag is refused; an unknown tag gets a hint
+        import mistake_record as _MR      # 0.27.1 (items 3, 2): a mistake record has its fields, and the harness adds the pointer
+        if _MR.is_mistake(tags):
+            probs_ = _MR.problems(tags, body, candidate=_candidate)
+            if probs_:
+                raise HarnessError("mistake record refused (nothing recorded): " + "; ".join(probs_) +
+                                   ". Body lines: What:, Found by:, Model:, Kind:; plus tag visible or hindsight.")
+            if not _candidate:      # a correction candidate carries the hook's own exact pointer (mistake_ingest)
+                body = (body or "").rstrip("\n") + "\n" + "\n".join(_MR.pointer_lines(self.home, aid, act=((_MR._fields(body).get("what") or _MR._fields(body).get("act") or [""])[0])))
         if kind == "note" and "lesson" in [str(t).strip().lower() for t in (tags or [])] and lesson_repeated(body):
             raise HarnessError("lesson body repeats a field line (" + ", ".join(lesson_repeated(body)) + "): each of What happened, Cause, When, "
                                "Rule, Found by may appear once (a second line would never be shown or checked)")
@@ -8330,6 +8343,10 @@ class Harness:
                 self.ingest_lookup_spool()
             except Exception:
                 pass
+            try:   # 0.27.1 (item 1): correction candidates spooled by scripts/correction_hook.py
+                self.ingest_mistake_spool()
+            except Exception:
+                pass
             try:   # M6: the cue hook reads only lessons that are still approved (an edit or retag drops one)
                 self.write_cue_lessons()
             except Exception:
@@ -8870,6 +8887,18 @@ class Harness:
             return float("inf")
 
     CUE_SPOOL_MAX = 500   # lines per sync; the rest waits for the next one
+
+    def ingest_mistake_spool(self, projects_dir=None):
+        """0.27.1 (item 1): spool lines from the correction hook become candidate mistake records (one call into mistake_ingest)."""
+        import mistake_ingest as MI
+        st = self.state()
+
+        def file_(ag, title, body, tags):
+            mdl = (st.agents.get(ag) or {}).get("model") or "unknown"
+            if not any(l.startswith("Model:") for l in body.splitlines()):     # the transcript's own model wins; else the registered one
+                body += "\nModel: " + str(mdl).splitlines()[0][:80]
+            return self._record(ag, "note", title, body, tags, _candidate=True)
+        return MI.ingest(self.home, lambda sid: st.sessions.get(sid), file_, projects_dir)
 
     def ingest_cue_spool(self):
         """0.19.0 (R-113, M5, reworked M6 for critic N-9d725): the lesson cue hook (scripts/lesson_cue.py) never takes the ledger lock;

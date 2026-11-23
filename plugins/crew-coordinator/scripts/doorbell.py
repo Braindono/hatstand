@@ -174,6 +174,7 @@ WAKE_PROMPT_V2 = "Run harness_inbox."
 FIRE_FIELDS = ('a fire of a registered routine reports the run result\'s fields, copied: prompt "<prompt as returned>", '
                'enabled <true|false>, session "<bound session id>"')
 _BODY_RE = re.compile(r"\b(body|text)\b", re.I)
+TRIGGER_DO_LINES = False                  # 0.27.1: no RemoteTrigger Do-line goes to any agent; wake changes go to role:automations or the operator (envoy, 11/22)
 WAKE_CLAIM_S = 300                       # a verify or disable Do-line goes to another relay holder after 5 min with no report
 # 0.23.0 (A-08480 item 3 gaps 1 and 2): what counts as the status of a fire. (a) the 3-digit number after an HTTP form (HTTP 404, HTTP <404>,
 # HTTP status 404, HTTP error 500, HTTP code 403, http_status=404, HTTP-404, HTTP/2 404, HTTP/1.1 200, HTTPS 404); (b) a 4xx or 5xx number followed by a
@@ -380,6 +381,8 @@ def _wake_trigger(st, role, h=None):
     Fix round 1 (critic m-5e2216478366): moving to the new form never costs a working wake. A pending or rejected registration falls
     back to the legacy pin; only a verified routine replaces it, and a verified routine that went stale keeps hiding it (a holder change
     stales the legacy pin too, and a changed routine must not be swapped for an older one silently)."""
+    if not TRIGGER_DO_LINES:
+        return None
     e, state = reg_state(st, role)
     if e and state == "verified":
         return None if trigger_dead(st, e["trigger"]) else e["trigger"]     # 0.25.0 (item 22): never a disabled routine
@@ -1508,11 +1511,15 @@ def rewake_relay_line(d):
         if d.get("to_session"):
             return (f'Do: SendMessage to {d["to_session"]}: Mail {mid} from {d.get("role") or "agent"}, thread {d.get("thread")}. Run harness_inbox. '
                     f'(Relay for a sender that cannot ring; fixed fields only.) No report is needed.')
+        if not TRIGGER_DO_LINES:
+            return None
         return (f'Do: RemoteTrigger action=run trigger_id={d.get("trigger")} (relay for {mid}; load the tool with ToolSearch select:RemoteTrigger if it is '
                 f'deferred; run with no body; no other trigger tool). No report is needed. No RemoteTrigger tool here: skip it.')
     if d.get("to_session"):
         return (f'Do: SendMessage to {d["to_session"]}: Mail {mid} from {d.get("role") or "agent"}, thread {d.get("thread")}. Run '
                 f'harness_inbox. (Rewake {n} of 2 for woken mail still unread; fixed fields only.) No report is needed.')
+    if not TRIGGER_DO_LINES:        # 0.27.1 (critic 1): an offer stored before the upgrade prints no trigger line either
+        return None
     return (f'Do: RemoteTrigger action=run trigger_id={d.get("trigger")} (rewake {n} of 2 for {mid}, woken mail still unread; load the tool '
             f'with ToolSearch select:RemoteTrigger if it is deferred; run with no body; no other trigger tool). No report is needed. '
             f'No RemoteTrigger tool here: skip it.')
@@ -1568,6 +1575,8 @@ def wake_do(h, caller, now=None):
     """0.24.0 (item 13): one Do-line for a live Code relay holder (a relay role, a local_ id on this machine): read a pending routine and
     report wake_verify, or disable a routine a different trigger replaced and report wake_disabled. One claim per routine (wake.claim, under the
     ledger lock); after WAKE_CLAIM_S with no report another holder gets it. The registrant and its lineage never verify. Never raises."""
+    if not TRIGGER_DO_LINES:
+        return None
     try:
         now = float(now if now is not None else time.time())
         st = h.state()
@@ -2145,6 +2154,8 @@ def relay_expire(h, now=None):
 
 def relay_line(d):
     """The claimed Do-line for a relay offer: SendMessage to the holder's id, or (item 18 point 6) the recipient's verified routine."""
+    if d.get("trigger") and not TRIGGER_DO_LINES:
+        return relay_do_line(d.get("to_session"), d.get("msg_id"), d.get("role") or "agent", d.get("thread")) if d.get("to_session") else None
     if d.get("trigger"):
         return relay_trigger_line(d.get("trigger"), d.get("msg_id"), d.get("role") or "agent", d.get("thread"),
                                   fields=bool(d.get("fields", True)))

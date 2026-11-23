@@ -36,6 +36,7 @@ HARNESS_DEFAULTS = {
     "stopwords_extra": ["hub"],
     "min_term_hits": 2,
     "bypass_marker": "[searched:",
+    "one_open_question": True,         # 0.27.1: a second chat asking him about a topic another chat asked about in the last 4 hours is flagged (open_questions.py)
     "answers_ledger": "Projects/Exchange/projects/secretary/ANSWERS.md",
 }
 DEFAULTS = {
@@ -58,6 +59,7 @@ DEFAULTS = {
     "stopwords_extra": ["hub"],
     "min_term_hits": 2,
     "bypass_marker": "[searched:",
+    "one_open_question": True,         # 0.27.1: a second chat asking him about a topic another chat asked about in the last 4 hours is flagged (open_questions.py)
     "answers_ledger": "Projects/Exchange/projects/secretary/ANSWERS.md",
 }
 EVALUATED = False        # set by check_text: True when the text held at least one question (so an allow can be logged)
@@ -498,6 +500,21 @@ def main():
         elif mode == "pre":
             msg = pre(d)
             kind = "pre"
+            try:        # 0.27.1: one open question per topic across chats (open_questions.py); never fails the gate
+                if not CFG.get("one_open_question", True):
+                    raise StopIteration
+                import harness as H, open_questions as OQ
+                home_ = H.Harness().home
+                for t_ in message_texts(d) if not (d.get("tool_name") or "").endswith("AskUserQuestion") else [q.get("question", "") for q in ((d.get("tool_input") or {}).get("questions") or []) if isinstance(q, dict)]:
+                    for q_ in extract_questions(t_ if "?" in t_ else t_ + "?"):
+                        m_ = OQ.seen(home_, aid, role, OQ.topic_terms(q_))
+                        if m_:
+                            msg = (msg + " ;; " if msg else "") + m_
+                            EVALUATED = True
+            except StopIteration:
+                pass
+            except Exception as e:
+                log_err(e)
         else:
             return
         if not msg:

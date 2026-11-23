@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.27.1: mistake capture the harness enforces
+- A record tagged `mistake` is refused unless it has the lines What, Found by, Model and Kind (claim or code) and exactly one tag of visible or hindsight; nothing is recorded when it is refused.
+- The harness adds the session path and transcript line to a mistake record from a hook on harness_record; an agent cannot set or leave out those lines, and if the hook did not run the record says so and is still filed.
+- When he corrects an agent (cues such as "that's wrong", "I said", "not what I asked", "why did you"; thanks, praise, quotes and pasted text never count), a hook files a candidate mistake record pointing at the agent's previous turn with his words quoted, found by operator, and tells the agent to add one description line. A spool line written before this upgrade is rejected if the new cue list no longer matches its quote.
+- No RemoteTrigger Do-line is issued to any agent any more (wake changes go to role:automations or the operator).
+- The restore skill archives the retired chat at once, without asking him (only the session id the harness result names).
+- One open question per topic across chats: a question to him on a topic another chat asked about in the last 4 hours is flagged by the ask gate (observe or enforce as the gate is set).
+- The one-command check also flags an undo line placed inside the copy block next to a command.
+- The ontology ships the tags mistake, visible, hindsight, candidate and round7.
+- Gate file changed: hooks/hooks.json (two new hooks: a PreToolUse hook on harness_record that saves the transcript pointer, and a UserPromptSubmit hook that files correction candidates).
+
 ## 0.27.0: the signing screen shows what he signs
 - The signing screen shows what he signs: an approval request carries its action and args, and the root signer checks them against the digest and prints them in full.
 - Dead code removed from the signer: the old grant, sign-pending and consume functions.

@@ -1030,6 +1030,59 @@
     "folders",
     "infra"
    ]
+  },
+  {
+   "id": "fail.mistake",
+   "label": "candidate mistake (an agent act recorded at the moment, before triage)",
+   "facet": "failure",
+   "broader": [],
+   "aliases": [
+    "mistake"
+   ]
+  },
+  {
+   "id": "fail.mistake-visible",
+   "label": "visible mistake (the rule or fact was in front of the agent)",
+   "facet": "failure",
+   "broader": [
+    "fail.mistake"
+   ],
+   "aliases": [
+    "visible"
+   ]
+  },
+  {
+   "id": "fail.mistake-hindsight",
+   "label": "hindsight mistake (the missing fact was not in front of the agent)",
+   "facet": "failure",
+   "broader": [
+    "fail.mistake"
+   ],
+   "aliases": [
+    "hindsight"
+   ]
+  },
+  {
+   "id": "fail.mistake-candidate",
+   "label": "mistake candidate filed by the correction hook, not yet checked",
+   "facet": "failure",
+   "broader": [
+    "fail.mistake"
+   ],
+   "aliases": [
+    "candidate"
+   ]
+  },
+  {
+   "id": "act.round7",
+   "label": "round 7 study (mistake capture pilot)",
+   "facet": "activity",
+   "broader": [
+    "act.research"
+   ],
+   "aliases": [
+    "round7"
+   ]
   }
  ]
 }
