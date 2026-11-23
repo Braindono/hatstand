@@ -129,6 +129,13 @@ class SudoersDropIn(unittest.TestCase):
         self.assertIn("-m 0440 -o root -g wheel", t)
         self.assertLess(t.index("/etc/sudoers.d is missing"), i_visudo)
 
+    def test_an_existing_different_dropin_or_symlink_is_refused_before_visudo(self):
+        t = self.text
+        i_exists, i_visudo = t.index("already exists and differs"), t.index("visudo -cf")
+        self.assertLess(i_exists, i_visudo)
+        self.assertIn("is a symlink", t[t.index("harness-grant is a symlink") - 120:])
+        self.assertIn("cmp -s /etc/sudoers.d/harness-grant", t)
+
     def test_header_has_the_undo_and_the_line_and_sha_are_printed(self):
         head = "\n".join(self.text.splitlines()[:6])
         self.assertIn("sudo rm /etc/sudoers.d/harness-grant", head)

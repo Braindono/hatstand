@@ -39,6 +39,35 @@ class Gate(unittest.TestCase):
     def tearDown(self):
         OS.LOG, OS.PUB, OS.FLAG = self._old
 
+    def test_approval_request_carries_its_text_and_the_helper_checks_it_and_shows_it(self):
+        """0.27.0: the scope text is in the request; the root helper recomputes the digest from it with the harness's own canonical form."""
+        import time
+        items = ["SCOPE-ITEM-ONE verbatim", "SCOPE-ITEM-TWO verbatim"]
+        r = self.h.request_approval(self.a, "release_scope", {"plugin": "p", "version": "1.2.3", "items": items, "rationale": "because"})
+        rid = H._file_approval_request(self.h, r["pending"] if isinstance(r, dict) else r)
+        name = rid + ".json"
+        raw, req, digests = G._vet(self.cfg, name, time.time())             # passes: digest recomputed from the shown text equals the event's
+        shown = "\n".join(G.render(req))
+        for w in ("ACTION: release_scope", "SCOPE-ITEM-ONE verbatim", "SCOPE-ITEM-TWO verbatim", "1.2.3"):
+            self.assertIn(w, shown)
+        import json
+        path = os.path.join(self.cfg["pending"], name)
+        doc = json.load(open(path))
+        for tamper in (lambda d: d["detail"]["args"].update(rationale="other"), lambda d: d["detail"].update(action="retag"),
+                       lambda d: d.pop("detail"), lambda d: d["events"].append(d["events"][0])):
+            d2 = json.loads(json.dumps(doc)); tamper(d2)
+            with open(os.path.join(self.cfg["pending"], "cccccccccccc.json"), "wb") as f:
+                f.write(OS._MAP.canonical(d2).encode())
+            with self.assertRaises(G.Refuse): G._vet(self.cfg, "cccccccccccc.json", time.time())
+
+    def test_non_ascii_args_and_float_args(self):
+        import time
+        r = self.h.request_approval(self.a, "release_scope", {"version": "1.0.0", "plugin": "p", "rationale": "caf\u00e9 \u2014 ok", "items": ["z", "\u00fcber"]})
+        rid = H._file_approval_request(self.h, r["pending"] if isinstance(r, dict) else r)
+        G._vet(self.cfg, rid + ".json", time.time())                       # key order and non-ASCII text do not change the recomputed digest
+        with self.assertRaises(H.HarnessError):
+            self.h.request_approval(self.a, "release_scope", {"plugin": "p", "version": "1.0.0", "items": ["abc"], "rationale": 1.5})
+
     def test_human_append_refused_outside_ctx(self):
         self.assertTrue(OS.gate_on())
         with self.assertRaises(H.HarnessError):

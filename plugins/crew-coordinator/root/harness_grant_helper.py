@@ -7,11 +7,12 @@ consume itself by matching ledger event digests to the signed digests. `cutover`
 Why: only code he cannot edit may decide what is signed, and he must read the exact text first.
 Never: stores or sees his password, follows a path he controls, or writes under /Users.
 Depends on: the standard library, /usr/bin/openssl, /usr/bin/dscl, /bin/ps, harness_event_map and harness_verify (same folder).
-Size note: about 460 lines (over the 300 default) because path safety, rendering and the commands share one set of checks and must stay in one root-owned file.
-Test seams: every command takes cfg, tty_in, tty_out and clock explicitly (the old grant/sign-pending/consume functions stay for tests, no longer reachable from main); main() fixes the real values.
+Size note: about 480 lines (over the 300 default) because path safety, rendering and the commands share one set of checks and must stay in one root-owned file.
+Test seams: every command takes cfg, tty_in, tty_out and clock explicitly; main() fixes the real values.
 """
 import base64
 import contextlib
+import hashlib
 import hmac
 import json
 import os
@@ -29,8 +30,9 @@ import harness_verify as V               # noqa: E402
 
 CFG = {"state_dir": "/var/db/harness-grant", "key": "/var/db/harness-grant/key", "pub": "/usr/local/etc/harness-grant.pub", "log": "/usr/local/var/harness-grants.log",
        "pending": "/EXCHANGE_HOME/_harness/operator-pending", "home": "/EXCHANGE_HOME", "bin": "/EXCHANGE_HOME/_harness/bin/harness.py",
-       "ledger": "/EXCHANGE_HOME/_harness/events.jsonl", "uid": 501, "window_s": 300, "act_s": 300,
-       "min_gap_s": 5, "max_prompts": 10, "tries": 3, "flag": "/usr/local/var/harness-grants.disabled"}
+       "ledger": "/EXCHANGE_HOME/_harness/events.jsonl", "uid": 501, "act_s": 300,
+       "flag": "/usr/local/var/harness-grants.disabled"}
+MAX_DEPTH = 12
 REQ_NAME = re.compile(r"^[0-9a-f]{12}\.json$")
 ADMIN_FILTER = ("claude", "Claude", "node-claude", "mcp_server")
 
@@ -85,6 +87,25 @@ def canonical_bytes_ok(raw):
         return d
     def bad(_):
         raise ValueError("float or constant")
+    depth = deepest = 0
+    in_str = esc_next = False
+    for c in raw:                      # bracket depth by a plain byte scan: json.loads would recurse and crash on a planted deep file
+        if in_str:
+            if esc_next:
+                esc_next = False
+            elif c == 0x5C:
+                esc_next = True
+            elif c == 0x22:
+                in_str = False
+        elif c == 0x22:
+            in_str = True
+        elif c in (0x5B, 0x7B):
+            depth += 1
+            deepest = max(deepest, depth)
+        elif c in (0x5D, 0x7D):
+            depth -= 1
+    if deepest > MAX_DEPTH:
+        raise ValueError("nested too deeply")
     o = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs, parse_float=bad, parse_constant=bad)
     if MAP.canonical(o).encode("utf-8") != raw:
         raise ValueError("not canonical")
@@ -109,29 +130,6 @@ def _log_append(cfg, rec):
         os.close(fd)
 
 
-def _read_json(path):
-    try:
-        return json.load(open(path))
-    except Exception:
-        return None
-
-
-def _window(cfg, tty, now):
-    w = _read_json(os.path.join(cfg["state_dir"], "window.json"))
-    if not tty:
-        raise Refuse("SUDO_TTY is not set: run this through sudo in Terminal.app")
-    if not w or now > w["expires"] or w["tty"] != tty:
-        raise Refuse("no live window on this tty: run `sudo /usr/local/libexec/harness-grant grant` first")
-    return w
-
-
-def _save_window(cfg, w):
-    p = os.path.join(cfg["state_dir"], "window.json")
-    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    os.write(fd, json.dumps(w).encode())
-    os.close(fd)
-
-
 def ancestry_ok(pid=None, run=subprocess.run):
     """Filter only (a double fork passes): refuse when a Claude process is above us."""
     pid = pid or os.getppid()
@@ -148,25 +146,14 @@ def ancestry_ok(pid=None, run=subprocess.run):
     return True
 
 
-def cmd_grant(cfg, tty, user, auth_fn, now, ids=secrets.token_hex):
-    if not tty:
-        raise Refuse("SUDO_TTY is not set")
-    ok = False
-    for i in range(cfg["tries"]):
-        if auth_fn(user):
-            ok = True
-            break
-        _log_append(cfg, {"t": "authfail", "n": i + 1, "time": int(now)})
-    if not ok:
-        raise Refuse("password check failed")
-    w = {"id": ids(8), "tty": tty, "minted": int(now), "expires": int(now) + cfg["window_s"], "prompts": 0, "last": 0}
-    _save_window(cfg, w)
-    _log_append(cfg, {"t": "window", "id": w["id"], "minted": w["minted"], "expires": w["expires"]})
-    return w["id"]
-
-
 def render(req):
     out = [f"KIND: {esc(req['kind'])}", f"requester (unverified): {esc(req.get('requester'))}"]
+    det = req.get("detail")
+    if isinstance(det, dict):
+        ev0 = (req.get("events") or [{}])[0]
+        out.append(f"APPROVAL: {esc((ev0.get('data') or {}).get('id'))}")
+        out.append(f"ACTION: {esc(det.get('action'))}   (the text below is checked against the digest he signs)")
+        out += ["  " + line for line in json.dumps(det.get("args"), sort_keys=True, indent=1, ensure_ascii=True).splitlines()]
     for i, ev in enumerate(req["events"], 1):
         if MAP.high_risk(ev):
             out.append("!!!!!! HIGH RISK: seat, publish, pin, archive or operator mail !!!!!!")
@@ -196,6 +183,24 @@ def consumed_requests(cfg):
     return {acts.get(r.get("act")) for r in recs if r.get("t") == "consume"}
 
 
+def check_detail(req):
+    """0.27.0: an approval request must carry the action and args it is for; they are shown to him in full, so they must be true.
+    The digest the event names is recomputed here from the shown text (same canonical form as the harness): a lie in the text fails it."""
+    det = req.get("detail")
+    if req["kind"] != "approve":
+        if det is not None:
+            raise ValueError("only an approval request carries detail")
+        return
+    evs = req["events"]
+    if not (isinstance(det, dict) and set(det) == {"action", "args"} and isinstance(det["action"], str) and isinstance(det["args"], dict)):
+        raise ValueError("an approval request must carry its action and args (filed before 0.27.0, or without its text): ask again")
+    if len(evs) != 1 or evs[0].get("type") != "approval.granted":
+        raise ValueError("an approval request is exactly one approval.granted event")
+    want = hashlib.sha256(MAP.canonical({"action": det["action"], "args": det["args"]}).encode("utf-8")).hexdigest()
+    if (evs[0].get("data") or {}).get("args_digest") != want:
+        raise ValueError("the action and args shown do not match the digest the event signs")
+
+
 def _vet(cfg, name, now):
     """Read one pending request safely and check its shape: -> (raw bytes, request, per-event digests) or Refuse."""
     raw = open_regular(os.path.join(cfg["pending"], name), cfg["uid"], 65536)
@@ -212,57 +217,20 @@ def _vet(cfg, name, now):
             digests.append(d)
         if int(req.get("expires", 0)) < now:
             raise ValueError("request expired")
-    except (ValueError, KeyError, TypeError, AttributeError) as e:
-        raise Refuse(f"request refused: {e}")
+        check_detail(req)
+    except Refuse:
+        raise
+    except Exception as e:             # any odd file (RecursionError included) is one refused request, never a crash of the whole list
+        raise Refuse(f"request refused: {esc(e)}")
     return raw, req, digests
 
 
-def _record_act(cfg, raw, digests, now, ledger_id, window_id, ids):
+def _record_act(cfg, raw, digests, now, ledger_id, ids):
     import hashlib
     rec = {"t": "act", "id": ids(8), "req": hashlib.sha256(raw).hexdigest(), "digests": digests, "n": len(digests),
-           "expires": int(now) + cfg["act_s"], "nonce": ids(8), "ledger": ledger_id, "window": window_id}
+           "expires": int(now) + cfg["act_s"], "nonce": ids(8), "ledger": ledger_id}
     _log_append(cfg, rec)
     return rec
-
-
-def cmd_sign_pending(cfg, tty, tty_in, tty_out, now, ledger_id, rnd=secrets.token_hex, ids=secrets.token_hex):
-    w = _window(cfg, tty, now)
-    if w["prompts"] >= cfg["max_prompts"] or now - w["last"] < cfg["min_gap_s"]:
-        raise Refuse("too many or too fast prompts in this window")
-    import hashlib
-    gone = consumed_requests(cfg)
-    names = [n for n in list_pending(cfg)
-             if hashlib.sha256(open_regular(os.path.join(cfg["pending"], n), cfg["uid"], 65536)).hexdigest() not in gone]
-    if not names:
-        raise Refuse("no pending requests")
-    tty_out.write(f"{len(names)} pending request(s), newest first, showing {min(20, len(names))}:\n")
-    for i, n in enumerate(names[:20], 1):
-        tty_out.write(f"  {i}. {n}\n")
-    tty_out.write("number to review: ")
-    tty_out.flush()
-    try:
-        name = names[int(tty_in.readline().strip()) - 1]
-    except (ValueError, IndexError):
-        raise Refuse("no such request")
-    raw, req, digests = _vet(cfg, name, now)
-    lines = render(req)
-    if len(lines) > 400:
-        raise Refuse("request too long to read; refused")
-    for k in range(0, len(lines), 40):
-        tty_out.write("\n".join(lines[k:k + 40]) + "\n")
-        if k + 40 < len(lines):
-            tty_out.write("-- Enter for more -- ")
-            tty_out.flush()
-            tty_in.readline()
-    code = rnd(2)
-    w["prompts"] += 1
-    w["last"] = int(now)
-    _save_window(cfg, w)
-    tty_out.write(f"Type {code} to sign exactly this (one attempt): ")
-    tty_out.flush()
-    if not hmac.compare_digest(tty_in.readline().strip().lower(), code):
-        raise Refuse("wrong code: nothing signed")
-    return _record_act(cfg, raw, digests, now, ledger_id, w["id"], ids)["id"]
 
 
 def live_pending(cfg, now):
@@ -301,7 +269,11 @@ def vet_sudo_tty(path, uid, stdin_fd=0):
     if not stat.S_ISCHR(st.st_mode) or st.st_uid != uid:
         raise Refuse("the terminal sudo ran on is not a character device owned by the configured account")
     if not ok_stdin:
-        raise Refuse("the code must be typed on the terminal sudo ran on (stdin is not that terminal)")
+        try:
+            have = "%s (device %d)" % (os.ttyname(stdin_fd) if os.isatty(stdin_fd) else "not a terminal", os.fstat(stdin_fd).st_rdev)
+        except OSError:
+            have = "unreadable"
+        raise Refuse("the code must be typed on the terminal sudo ran on: SUDO_TTY %s (device %d), stdin is %s" % (path, st.st_rdev, have))
 
 
 def cmd_approve(cfg, tty, tty_in, tty_out, now, ledger_id, rnd=secrets.token_hex, ids=secrets.token_hex, same_tty=lambda: True):
@@ -314,6 +286,17 @@ def cmd_approve(cfg, tty, tty_in, tty_out, now, ledger_id, rnd=secrets.token_hex
     if not items:
         raise Refuse("no pending requests" + (" (skipped: " + "; ".join(skipped) + ")" if skipped else ""))
     items = items[:20]
+    seen = {}
+    for n, _raw, req, _dg in items:
+        for ev in req["events"]:
+            aid = (ev.get("data") or {}).get("id") if req["kind"] == "approve" else None
+            if aid is None:
+                continue
+            if not re.fullmatch(r"A-[0-9A-Za-z]{1,8}", str(aid)):
+                raise Refuse(f"request {n[:-5]} names an approval id that is not of the form A-xxxxx; nothing signed")
+            if aid in seen:
+                raise Refuse(f"two pending requests name the same approval {esc(aid)} ({seen[aid][:-5]} and {n[:-5]}); remove one; nothing signed")
+            seen[aid] = n
     lines = []
     for n, raw, req, digests in items:
         part = [f"===== request {n[:-5]} ====="] + render(req)
@@ -335,12 +318,25 @@ def cmd_approve(cfg, tty, tty_in, tty_out, now, ledger_id, rnd=secrets.token_hex
     tty_out.flush()
     if not hmac.compare_digest(tty_in.readline().strip().lower(), code):
         raise Refuse("wrong code: nothing signed")
-    return [_record_act(cfg, raw, dg, now, ledger_id, None, ids) for _, raw, _, dg in items]
+    return [_record_act(cfg, raw, dg, now, ledger_id, ids) for _, raw, _, dg in items]
+
+
+def parse_line(line):
+    """One ledger line -> a dict, or None for anything else (bad JSON, a non-object, or a nesting deep enough to crash the parser)."""
+    try:
+        e = json.loads(line)
+    except (ValueError, RecursionError):
+        return None
+    return e if isinstance(e, dict) else None
 
 
 def ledger_tail_seq(cfg):
-    raw = open_regular(cfg["ledger"], cfg["uid"], 1 << 30).splitlines()
-    return json.loads(raw[-1])["seq"]
+    """seq of the last ledger line that is an object with an integer seq (a planted junk last line is skipped, never a crash)."""
+    for line in reversed(open_regular(cfg["ledger"], cfg["uid"], 1 << 30).splitlines()):
+        e = parse_line(line)
+        if e is not None and isinstance(e.get("seq"), int):
+            return e["seq"]
+    raise Refuse("the ledger has no readable event")
 
 
 def consume_matched(cfg, acts, after_seq, now):
@@ -349,11 +345,8 @@ def consume_matched(cfg, acts, after_seq, now):
     raw = open_regular(cfg["ledger"], cfg["uid"], 1 << 30)
     new = []
     for line in raw.splitlines():
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(e, dict) and isinstance(e.get("seq"), int) and e["seq"] > after_seq and MAP.enforced(e.get("type"), e.get("actor"), e.get("data")):
+        e = parse_line(line)
+        if e is not None and isinstance(e.get("seq"), int) and e["seq"] > after_seq and MAP.enforced(e.get("type"), e.get("actor"), e.get("data")):
             new.append(e)
     used, out = set(), []
     recs, _ = V.load_log(cfg["log"], cfg["pub"])
@@ -378,97 +371,68 @@ def consume_matched(cfg, acts, after_seq, now):
     return out
 
 
+def _as_him(cfg, user_env_home):
+    return dict(user=cfg["uid"], group=pwd.getpwuid(cfg["uid"]).pw_gid, extra_groups=[], cwd="/",
+                env={"HOME": user_env_home, "HARNESS_HOME": cfg["home"], "PATH": "/usr/bin:/bin"})
+
+
+def end_tickets(cfg, user_env_home, run=subprocess.run):
+    """sudo -K as HIS uid: ends every sudo ticket of his, so no child can ride the one sudo just made. -> True when it succeeded."""
+    k = run(["/usr/bin/sudo", "-K"], stdin=subprocess.DEVNULL, capture_output=True, **_as_him(cfg, user_env_home))
+    return getattr(k, "returncode", 1) == 0
+
+
 def run_apply(cfg, user_env_home, file_only=False, run=subprocess.run):
     """Apply as HIS uid, never root: the editable harness.py cannot forge what root records (root matches digests itself).
-    His sudo tickets are killed first (sudo -K as his uid), so the child cannot ride the ticket sudo just made; the child has no stdin,
+    His sudo tickets are killed first, so the child cannot ride the ticket sudo just made; the child has no stdin,
     its own session (no controlling tty), a 60 s limit, and its output is shown once, escaped and capped."""
-    as_him = dict(user=cfg["uid"], group=pwd.getpwuid(cfg["uid"]).pw_gid, extra_groups=[], cwd="/",
-                  env={"HOME": user_env_home, "HARNESS_HOME": cfg["home"], "PATH": "/usr/bin:/bin"})
-    run(["/usr/bin/sudo", "-K"], stdin=subprocess.DEVNULL, capture_output=True, **as_him)
+    if not end_tickets(cfg, user_env_home, run):
+        return "refused: his sudo tickets could not be ended (sudo -K failed); nothing was applied"
     try:
         r = run(["/usr/bin/python3", "-E", "-s", cfg["bin"], "--home", cfg["home"], "apply-all"] + (["--file-only"] if file_only else []),
-                stdin=subprocess.DEVNULL, start_new_session=True, timeout=60, capture_output=True, text=True, **as_him)
+                stdin=subprocess.DEVNULL, start_new_session=True, timeout=60, capture_output=True, text=True, **_as_him(cfg, user_env_home))
     except subprocess.TimeoutExpired:
         return "apply timed out after 60 s"
     return esc((r.stdout + r.stderr).strip())[:2000]
 
 
-def _ledger_events(cfg, seqs):
-    raw = open_regular(cfg["ledger"], cfg["uid"], 1 << 30)
-    want, out = set(seqs), {}
-    for line in raw.splitlines():
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(e, dict) and e.get("seq") in want:
-            out[e["seq"]] = e
-    return out
-
-
-def cmd_consume(cfg, tty, act_id, pairs, now):
-    """pairs: [(seq, hash)]. Order of events must equal the grant's digest list; recorded once (same set again is a no-op)."""
-    if not tty:
-        raise Refuse("SUDO_TTY is not set: run this through sudo in Terminal.app")
-    recs, _ = V.load_log(cfg["log"], cfg["pub"])
-    act = next((r for r in recs if r.get("t") == "act" and r.get("id") == act_id), None)
-    if act is None or now > act["expires"] + 3600 * 24 * 14:
-        raise Refuse("unknown or old grant")
-    done = [r for r in recs if r.get("t") == "consume" and r.get("act") == act_id]
-    if done:
-        if [list(p) for p in pairs] == [list(p) for p in done[0]["events"]]:
-            return "already consumed (same events)"
-        raise Refuse("grant already consumed for other events")
-    if len(pairs) != act["n"]:
-        raise Refuse("event count does not match the grant")
-    evs = _ledger_events(cfg, [s for s, _ in pairs])
-    for (s, h), d in zip(pairs, act["digests"]):
-        e = evs.get(s)
-        if e is None or e.get("hash") != h or not MAP.enforced(e.get("type"), e.get("actor"), e.get("data")) or MAP.event_digest(e) != d:
-            raise Refuse(f"ledger event {s} does not match the grant")
-        if e.get("t", 0) > act["expires"] + 5:
-            raise Refuse(f"event {s} was written after the grant expired")
-    _log_append(cfg, {"t": "consume", "act": act_id, "events": [[s, h] for s, h in pairs], "time": int(now)})
-    return "consumed"
-
-
 def cmd_cutover(cfg):
     """Run by the install script as root: records the ledger tail as the cutover."""
-    raw = open_regular(cfg["ledger"], cfg["uid"], 1 << 30).splitlines()
-    first, last = json.loads(raw[0]), json.loads(raw[-1])
+    lines = open_regular(cfg["ledger"], cfg["uid"], 1 << 30).splitlines()
+    first = parse_line(lines[0]) if lines else None
+    last = next((e for e in (parse_line(l) for l in reversed(lines)) if e is not None and isinstance(e.get("seq"), int) and "hash" in e), None)
+    if first is None or "hash" not in first or last is None:
+        raise Refuse("the ledger has no readable first and last event")
     _log_append(cfg, {"t": "cutover", "seq": last["seq"], "hash": last["hash"], "ledger": first["hash"]})
 
 
 def ledger_id(cfg):
-    raw = open_regular(cfg["ledger"], cfg["uid"], 1 << 30)
-    return json.loads(raw.split(b"\n", 1)[0])["hash"]
-
-
-def real_auth(user, tty_path="/dev/tty"):
-    with open(tty_path) as t:
-        return subprocess.run(["/usr/bin/dscl", ".", "-authonly", user], stdin=t, env={}).returncode == 0
+    first = parse_line(open_regular(cfg["ledger"], cfg["uid"], 1 << 30).split(b"\n", 1)[0])
+    if first is None or "hash" not in first:
+        raise Refuse("the ledger's first event is unreadable")
+    return first["hash"]
 
 
 @contextlib.contextmanager
 def open_tty(path, uid, stdin_fd=0):
-    """0.26.3: open the terminal device sudo ran on (SUDO_TTY) itself, never the /dev/tty alias, as separate read and write handles (a tty is not seekable)."""
+    """Open the terminal device sudo ran on (SUDO_TTY) itself, never the /dev/tty alias, as separate read and write handles (a tty is not seekable).
+    Both handles are closed on every path, including a refusal."""
     vet_sudo_tty(path, uid, stdin_fd)
     tin = tout = None
     try:
-        tin = os.fdopen(os.open(path, os.O_RDONLY | os.O_NOCTTY), "r")
-        tout = os.fdopen(os.open(path, os.O_WRONLY | os.O_NOCTTY), "w")
+        try:
+            tin = os.fdopen(os.open(path, os.O_RDONLY | os.O_NOCTTY), "r")
+            tout = os.fdopen(os.open(path, os.O_WRONLY | os.O_NOCTTY), "w")
+        except OSError as e:
+            raise Refuse("cannot open the terminal: " + esc(e))
         if not (tty_matches(tin.fileno(), path) and tty_matches(tout.fileno(), path)):
-            raise Refuse("the terminal handle is not the sudo terminal")
-    except OSError as e:
+            raise Refuse("the terminal handle is not the sudo terminal (devices %d and %d, SUDO_TTY device %d)"
+                         % (os.fstat(tin.fileno()).st_rdev, os.fstat(tout.fileno()).st_rdev, os.stat(path).st_rdev))
+        yield tin, tout
+    finally:
         for f in (tin, tout):
             if f:
                 f.close()
-        raise Refuse("cannot open the terminal: " + esc(e))
-    try:
-        yield tin, tout
-    finally:
-        tin.close()
-        tout.close()
 
 
 def main(argv):
@@ -483,11 +447,16 @@ def main(argv):
     if not ancestry_ok():
         print("refused: run this in Terminal.app, not inside a Claude chat or its terminal pane")
         return 1
+    signed = 0
     try:
         if cmd == "approve" and len(argv) == 2:
+            if not end_tickets(CFG, pwd.getpwuid(CFG["uid"]).pw_dir):          # before anything is listed or signed: a ticket that cannot be ended stops the run
+                print("refused: his sudo tickets could not be ended (sudo -K failed); nothing was signed")
+                return 1
+            lid, tail = ledger_id(CFG), ledger_tail_seq(CFG)                   # read before anything is signed: a bad ledger refuses here
             with open_tty(tty, CFG["uid"]) as (tin, tout):
-                acts = cmd_approve(CFG, tty, tin, tout, time.time(), ledger_id(CFG), same_tty=lambda: tty_matches(tin.fileno(), tty))
-            tail = ledger_tail_seq(CFG)
+                acts = cmd_approve(CFG, tty, tin, tout, time.time(), lid, same_tty=lambda: tty_matches(tin.fileno(), tty))
+            signed = len(acts)
             print("signed", len(acts), "request(s); applying as", user)
             print(run_apply(CFG, pwd.getpwuid(CFG["uid"]).pw_dir))
             for line in consume_matched(CFG, acts, tail, time.time()):
@@ -501,6 +470,10 @@ def main(argv):
             return 2
     except Refuse as e:
         print("refused:", e)
+        return 1
+    except Exception as e:             # never a traceback
+        print("refused: internal error:", esc(type(e).__name__), esc(e))
+        print(f"{signed} request(s) were signed before this (valid 5 minutes, may not be applied): tell the envoy" if signed else "nothing was signed")
         return 1
     return 0
 

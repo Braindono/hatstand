@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.27.0: the signing screen shows what he signs
+- The signing screen shows what he signs: an approval request carries its action and args, and the root signer checks them against the digest and prints them in full.
+- Dead code removed from the signer: the old grant, sign-pending and consume functions.
+- The signer checks that `sudo -K` succeeded before it applies, and closes both terminal handles on every path; a terminal refusal names both devices.
+- Seat setup refuses a different existing /etc/sudoers.d/harness-grant.
+- `harness_admin op=timer` sets a Hub feed timer; the timer module is vendored into the plugin and never loaded from the ops tree.
+- A test fails if any script sends a notice as the operator.
+- Fix: one planted deeply nested request file no longer stops `approve` (nesting is capped at 12; any odd file is one skipped request; no traceback ever).
+- The signer ends his sudo tickets and checks that it worked before it lists or signs anything; an approval request is exactly one approval event; approval args with floats are refused when filed.
+- Fix: a planted deeply nested ledger line no longer crashes the signer after it signs; the ledger tail is read before anything is signed, and the signer says whether any request was signed if it fails. Two pending requests that name the same approval are refused.
+- Requests filed before this version cannot be signed after it (they carry no action and args); file them again.
+
 ## 0.26.2: operator signing in one line
 - His one line, constant: `sudo -k; sudo /usr/local/libexec/harness-grant approve; sudo -k`. One sudo password (sudo -k makes it fresh), then the root signer lists every live pending request in full ("N requests, M events"), asks one 4-hex code typed on the sudo tty, signs each request (single-use), applies as his uid (`harness.py apply-all`, clean environment) and records the consume itself by matching ledger digests. No ids and no script path on his line; `harness.py approve` and `role-assign` only say a request is waiting.
 - The helper no longer has `grant`, `sign-pending` or `consume` commands (their functions stay for tests). Applied requests move to operator-pending/done/ and leave the list (pending means: not yet consumed in the root log).

@@ -39,73 +39,45 @@ class Base(unittest.TestCase):
     def write_ledger(self):
         open(self.cfg["ledger"], "w").write("".join(json.dumps(e, sort_keys=True) + "\n" for e in self.led))
 
-    def window(self, tty=TTY):
-        return G.cmd_grant(self.cfg, tty, "user1", lambda u: True, self.now)
+    DETAIL = {"action": "retag_operator", "args": {"entry": "N-1", "project": "p"}}
 
-    def request(self, events, kind="approve", name="aaaaaaaaaaaa", expires=None, raw=None):
+    def dig(self, name="aaaaaaaaaaaa"):
+        """The args digest `request` fills in for the request called `name`."""
+        det = {"action": self.DETAIL["action"], "args": dict(self.DETAIL["args"], n=name)}
+        return __import__("hashlib").sha256(MAP.canonical(det).encode()).hexdigest()
+
+    def request(self, events, kind="approve", name="aaaaaaaaaaaa", expires=None, raw=None, detail="auto"):
+        """An approval request carries its action and args (0.27.0); by default a true detail and the matching digest are filled in."""
         req = {"v": 1, "kind": kind, "requester": "someone", "created": 1, "expires": expires or int(self.now) + 600, "events": events}
+        if kind == "approve" and detail == "auto" and len(events) == 1 and events[0].get("type") == "approval.granted":
+            det = {"action": self.DETAIL["action"], "args": dict(self.DETAIL["args"], n=name)}
+            dig = __import__("hashlib").sha256(MAP.canonical(det).encode()).hexdigest()
+            req["events"] = [dict(events[0], data=dict(events[0]["data"], args_digest=dig))]
+            req["detail"] = det
+        elif detail not in ("auto", None):
+            req["detail"] = detail
         b = raw if raw is not None else MAP.canonical(req).encode()
         open(os.path.join(self.cfg["pending"], name + ".json"), "wb").write(b)
         return b
 
-    def sign(self, code=None, choice="1\n", more=""):
+    def sign(self, answer="ab12"):
+        """One `approve` run: every live pending request shown, one code typed, each signed. -> (act records, what was shown)."""
         out = io.StringIO()
-        codes = []
-        def rnd(n):
-            c = "ab12" if code is None else code
-            codes.append(c); return c
-        tin = io.StringIO(choice + more + "ab12\n")
-        a = G.cmd_sign_pending(self.cfg, TTY, tin, out, self.now, G.ledger_id(self.cfg), rnd=rnd)
-        return a, out.getvalue()
+        acts = G.cmd_approve(self.cfg, TTY, io.StringIO(answer + "\n"), out, self.now, G.ledger_id(self.cfg), rnd=lambda n: "ab12", same_tty=lambda: True)
+        return acts, out.getvalue()
 
     def sent(self, seq, typ, data):
         e = ev(seq, typ, data, t=int(self.now)); self.led.append(e); self.write_ledger(); return (seq, e["hash"])
 
 
 class Helper(Base):
-    def test_window_needs_tty_and_password(self):
-        with self.assertRaises(G.Refuse): G.cmd_grant(self.cfg, "", "user1", lambda u: True, self.now)
-        calls = []
-        with self.assertRaises(G.Refuse): G.cmd_grant(self.cfg, TTY, "user1", lambda u: calls.append(1) or False, self.now)
-        self.assertEqual(len(calls), 3)                      # 3 tries, then refused
-
-    def test_full_flow_and_single_use(self):
-        self.window()
-        d = {"id": "A-1", "channel": "cli-tty", "by": "operator", "state": "granted", "args_digest": "x"}
-        self.request([{"type": "approval.granted", "data": d}])
-        act, shown = self.sign()
-        self.assertIn("A-1", shown)
-        pair = self.sent(3, "approval.granted", dict(d, result="free text differs"))   # display-only field may differ
-        self.assertEqual(G.cmd_consume(self.cfg, TTY, act, [pair], self.now), "consumed")
-        self.assertIn("already", G.cmd_consume(self.cfg, TTY, act, [pair], self.now))
-        other = self.sent(4, "approval.granted", d)
-        with self.assertRaises(G.Refuse): G.cmd_consume(self.cfg, TTY, act, [other], self.now)
-        cut, ok = V.accepted(self.cfg["log"], self.cfg["pub"])
-        self.assertIn(pair, ok); self.assertNotIn(other, ok)
-
-    def test_wrong_code_signs_nothing(self):
-        self.window(); self.request([{"type": "approval.granted", "data": {"id": "A-2"}}])
-        out = io.StringIO()
-        with self.assertRaises(G.Refuse):
-            G.cmd_sign_pending(self.cfg, TTY, io.StringIO("1\nzzzz\n"), out, self.now, "L", rnd=lambda n: "ab12")
-        recs, _ = V.load_log(self.cfg["log"], self.cfg["pub"])
-        self.assertFalse([r for r in recs if r["t"] == "act"])
-
-    def test_other_tty_refused(self):
-        self.window(); self.request([{"type": "approval.granted", "data": {"id": "A-2"}}])
-        with self.assertRaises(G.Refuse):
-            G.cmd_sign_pending(self.cfg, "/dev/ttys100", io.StringIO("1\nab12\n"), io.StringIO(), self.now, "L")
-        with self.assertRaises(G.Refuse): G.cmd_consume(self.cfg, "/dev/ttys100", "x", [], self.now)
-
     def test_padded_body_shown_whole_and_escapes(self):
-        self.window()
-        self.request([{"type": "role.assigned", "data": {"role": "operator", "agent": "A" * 300 + "TAILFIELD\x1b[2J‮"}}])
+        self.request([{"type": "role.assigned", "data": {"role": "operator", "agent": "A" * 300 + "TAILFIELD\x1b[2J‮"}}], kind="role_assign")
         _, shown = self.sign()
         self.assertIn("TAILFIELD", shown)
         self.assertNotIn("\x1b", shown); self.assertNotIn("‮", shown); self.assertIn("HIGH RISK", shown)
 
     def test_unknown_type_noncanonical_duplicate_float_refused(self):
-        self.window()
         for raw in (self.request([{"type": "weird.type", "data": {}}]),
                     b'{"kind": "x"}',
                     b'{"a":1,"a":2}', b'{"a":1.0}', b'{"a":NaN}'):
@@ -113,7 +85,6 @@ class Helper(Base):
             with self.assertRaises(G.Refuse): self.sign()
 
     def test_symlink_fifo_and_huge_refused(self):
-        self.window()
         p = os.path.join(self.cfg["pending"], "aaaaaaaaaaaa.json")
         for make in (lambda: os.symlink("/etc/hosts", p), lambda: os.mkfifo(p)):
             make()
@@ -125,33 +96,20 @@ class Helper(Base):
             os.rename(self.cfg["pending"], self.cfg["pending"] + "_real"); os.symlink(self.cfg["pending"] + "_real", self.cfg["pending"])
             G.open_regular(os.path.join(self.cfg["pending"], "aaaaaaaaaaaa.json"), os.getuid(), 70000)
 
-    def test_codes_random_and_gap_and_cap(self):
-        self.window(); self.assertNotEqual(G.secrets.token_hex(2) + G.secrets.token_hex(2), G.secrets.token_hex(4))
-        self.cfg["max_prompts"] = 1; self.cfg["min_gap_s"] = 0
-        self.request([{"type": "approval.granted", "data": {"id": "A-2"}}]); self.sign()
-        with self.assertRaises(G.Refuse): self.sign()
-
-    def test_consume_rejects_tampered_ledger_and_late_event(self):
-        self.window(); d = {"id": "A-3"}
-        self.request([{"type": "approval.granted", "data": d}]); act, _ = self.sign()
-        bad = self.sent(3, "approval.granted", {"id": "A-OTHER"})
-        with self.assertRaises(G.Refuse): G.cmd_consume(self.cfg, TTY, act, [bad], self.now)
-        e = ev(4, "approval.granted", d, t=int(self.now) + 99999); self.led.append(e); self.write_ledger()
-        with self.assertRaises(G.Refuse): G.cmd_consume(self.cfg, TTY, act, [(4, e["hash"])], self.now)
-
-    def test_installed_helper_has_no_user_path_writes(self):
+    def test_installed_helper_has_no_user_path_writes_and_no_dead_commands(self):
         src = open(os.path.join(HERE, "..", "root", "harness_grant_helper.py")).read()
         self.assertNotIn("subprocess.run([\"/usr/bin/sudo", src)
-        for w in ("getpass", "input(", "/dev/zero"):
+        for w in ("getpass", "input(", "/dev/zero", "def cmd_grant", "def cmd_sign_pending", "def cmd_consume", "def real_auth", "def _window"):
             self.assertNotIn(w, src)
 
 
 class Verifier(Base):
     def test_forged_human_event_and_deleted_consumed_event(self):
-        self.window(); d = {"id": "A-9"}
-        self.request([{"type": "approval.granted", "data": d}]); act, _ = self.sign()
-        pair = self.sent(3, "approval.granted", d)
-        G.cmd_consume(self.cfg, TTY, act, [pair], self.now)
+        d = {"id": "A-9"}
+        self.request([{"type": "approval.granted", "data": d}]); acts, _ = self.sign()
+        tail = G.ledger_tail_seq(self.cfg)
+        self.sent(3, "approval.granted", dict(d, args_digest=self.dig()))
+        G.consume_matched(self.cfg, acts, tail, self.now)
         self.assertEqual(V.audit(self.cfg["ledger"], self.cfg["log"], self.cfg["pub"]), [])
         self.sent(4, "role.assigned", {"role": "operator", "agent": "evil"})            # forged, no grant
         self.assertTrue(any("seq 4" in p for p in V.audit(self.cfg["ledger"], self.cfg["log"], self.cfg["pub"])))
@@ -159,7 +117,6 @@ class Verifier(Base):
         self.assertTrue(any("seq 3" in p for p in V.audit(self.cfg["ledger"], self.cfg["log"], self.cfg["pub"])))
 
     def test_forged_log_line_rejected(self):
-        self.window()
         open(self.cfg["log"], "a").write(json.dumps({"rec": {"t": "consume", "act": "x", "events": [[9, "h"]]}, "sig": "AAAA"}) + "\n")
         cut, ok = V.accepted(self.cfg["log"], self.cfg["pub"])
         self.assertNotIn((9, "h"), ok)
@@ -245,8 +202,8 @@ class OneCommand(Base):
         self.two()
         acts, _ = self.sign_all()
         tail = G.ledger_tail_seq(self.cfg)
-        self.sent(3, "approval.granted", dict(self.D, id="A-2"))                # applied out of order
-        self.sent(4, "approval.granted", self.D)
+        self.sent(3, "approval.granted", dict(self.D, id="A-2", args_digest=self.dig("bbbbbbbbbbbb")))     # applied out of order
+        self.sent(4, "approval.granted", dict(self.D, args_digest=self.dig("aaaaaaaaaaaa")))
         self.sent(5, "approval.granted", dict(self.D, id="A-EXTRA"))            # an extra enforced event nobody signed
         out = G.consume_matched(self.cfg, acts, tail, self.now)
         self.assertTrue(all("consumed 1" in o for o in out), out)
@@ -267,7 +224,7 @@ class OneCommand(Base):
         calls = []
         def stub(cmd, **kw):
             calls.append((cmd, kw))
-            return types.SimpleNamespace(stdout="x\x1b[2J" + "y" * 5000, stderr="")
+            return types.SimpleNamespace(stdout="x\x1b[2J" + "y" * 5000, stderr="", returncode=0)
         out = G.run_apply(dict(self.cfg, home="/h", bin="/h/b.py"), "/hh", run=stub)
         self.assertEqual(calls[0][0], ["/usr/bin/sudo", "-K"])
         self.assertEqual(calls[0][1]["user"], self.cfg["uid"])
@@ -280,9 +237,86 @@ class OneCommand(Base):
     def test_run_apply_timeout_reported(self):
         import subprocess
         def stub(cmd, **kw):
-            if cmd[0] == "/usr/bin/sudo": return None
+            if cmd[0] == "/usr/bin/sudo":
+                import types
+                return types.SimpleNamespace(returncode=0)
             raise subprocess.TimeoutExpired(cmd, 60)
         self.assertIn("timed out", G.run_apply(dict(self.cfg, home="/h", bin="/h/b.py"), "/hh", run=stub))
+
+    def test_sudo_kill_failure_aborts_before_the_apply_child(self):
+        import types
+        calls = []
+        def stub(cmd, **kw):
+            calls.append(cmd)
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="")
+        out = G.run_apply(dict(self.cfg, home="/h", bin="/h/b.py"), "/hh", run=stub)
+        self.assertIn("could not be ended", out)
+        self.assertEqual(calls, [["/usr/bin/sudo", "-K"]])                         # the apply child never started
+
+    def test_deeply_nested_planted_file_is_one_skipped_request_not_a_crash(self):
+        """The critic's input: one canonical ~6 kB file nested 3000 deep sat next to a good request and made `approve` die with RecursionError."""
+        self.request([{"type": "approval.granted", "data": {"id": "A-1"}}])
+        deep = ("[" * 3000 + "]" * 3000)
+        junk = ('{"created":1,"events":[' + deep + '],"expires":99999999,"kind":"approve","requester":"x","v":1}').encode()
+        open(os.path.join(self.cfg["pending"], "bbbbbbbbbbbb.json"), "wb").write(junk)
+        items, skipped = G.live_pending(self.cfg, self.now)
+        self.assertEqual(len(items), 1)
+        self.assertTrue(any("nested too deeply" in s for s in skipped), skipped)
+        acts, _ = self.sign()
+        self.assertEqual(len(acts), 1)
+
+    def test_approval_needs_exactly_one_event_and_its_text_and_shows_the_approval_id(self):
+        det = {"action": self.DETAIL["action"], "args": dict(self.DETAIL["args"], n="aaaaaaaaaaaa")}
+        e1 = {"type": "approval.granted", "data": {"id": "A-77", "args_digest": self.dig()}}
+        self.request([e1, dict(e1, data={"id": "A-78", "args_digest": "x"})], detail=det)        # a second event would be signed with no text
+        with self.assertRaises(G.Refuse): self.sign()
+        os.unlink(os.path.join(self.cfg["pending"], "aaaaaaaaaaaa.json"))
+        self.request([{"type": "approval.granted", "data": {"id": "A-77"}}], detail=None)         # no text at all
+        try:
+            self.sign()
+        except G.Refuse as e:
+            self.assertIn("ask again", str(e))
+        os.unlink(os.path.join(self.cfg["pending"], "aaaaaaaaaaaa.json"))
+        self.request([{"type": "approval.granted", "data": {"id": "A-77"}}])
+        _, shown = self.sign()
+        self.assertIn("APPROVAL: A-77", shown); self.assertIn("ACTION: retag_operator", shown)
+
+    def test_a_deep_ledger_line_never_crashes_the_signer(self):
+        """The critic's B1: a planted 3000-deep last ledger line made ledger_tail_seq and consume_matched die with RecursionError."""
+        junk = "[" * 3000 + "]" * 3000
+        with open(self.cfg["ledger"], "a") as f:
+            f.write(junk + "\n")
+        self.assertEqual(G.ledger_tail_seq(self.cfg), 2)                          # the last real event, junk skipped
+        self.assertEqual(G.consume_matched(self.cfg, [], 2, self.now), [])
+        self.assertIsNone(G.parse_line(junk)); self.assertIsNone(G.parse_line("[1]")); self.assertEqual(G.parse_line('{"a":1}'), {"a": 1})
+        open(self.cfg["ledger"], "w").write(junk + "\n")
+        with self.assertRaises(G.Refuse): G.ledger_tail_seq(self.cfg)
+        with self.assertRaises(G.Refuse): G.ledger_id(self.cfg)
+
+    def test_two_requests_naming_the_same_approval_id_refused_and_odd_ids_refused(self):
+        e = lambda i: {"type": "approval.granted", "data": {"id": i}}
+        self.request([e("A-1")], name="aaaaaaaaaaaa"); self.request([e("A-1")], name="bbbbbbbbbbbb")
+        with self.assertRaises(G.Refuse) as c: self.sign()
+        self.assertIn("same approval", str(c.exception))
+        os.unlink(os.path.join(self.cfg["pending"], "bbbbbbbbbbbb.json"))
+        self.request([e("A-1")], name="aaaaaaaaaaaa"); self.sign()                 # one request: fine
+        os.unlink(os.path.join(self.cfg["pending"], "aaaaaaaaaaaa.json"))
+        self.request([e("not an id\x1b[2J")], name="aaaaaaaaaaaa")
+        with self.assertRaises(G.Refuse): self.sign()
+
+    def test_sudo_kill_is_checked_before_anything_else(self):
+        import types
+        self.assertFalse(G.end_tickets(self.cfg, "/hh", run=lambda c, **k: types.SimpleNamespace(returncode=1)))
+        self.assertTrue(G.end_tickets(self.cfg, "/hh", run=lambda c, **k: types.SimpleNamespace(returncode=0)))
+
+    def test_vet_refusal_names_both_devices(self):
+        try:
+            G.vet_sudo_tty("/dev/ttys000", os.getuid(), 0)
+        except G.Refuse as e:
+            if "device" in str(e):
+                self.assertIn("SUDO_TTY", str(e)); self.assertIn("stdin is", str(e))
+        else:
+            self.skipTest("/dev/ttys000 passes here")
 
     def test_open_tty_failure_is_a_refusal(self):
         with self.assertRaises(G.Refuse):

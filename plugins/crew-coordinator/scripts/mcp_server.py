@@ -24,7 +24,7 @@ S, I, B, ARR = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}, {"t
 ADMIN_OPS = ["whoami", "ledger", "thread", "status", "set_expertise", "task_update", "group", "retire",
              "set_project", "roster", "role_define", "role_assign", "release_scope", "wake_register", "wake_verify", "wake_disabled", "registry", "verify", "export", "reload", "health", "archive", "unarchive", "pin",
              "approvals", "flag_release", "publish_release", "pin_corpus_index", "retag", "listen", "vault_write", "operator_script", "hatstand_sync", "lesson_curate", "concept_link", "concept_unlink", "recall_report", "notify_sent", "approvals_pending", "session_titled", "notify_undelivered", "nudge_result", "drift_explain", "case", "proctor_shadow",
-             "notify_listed", "release_defect", "owed_close", "owed"]   # 0.24.0 (A-b2950 items 8, 9)
+             "notify_listed", "release_defect", "owed_close", "owed", "timer"]   # 0.24.0 (A-b2950 items 8, 9)
 # 0.12.1 (C-01dcf): allowed args per admin op; unknown keys are an error, never silently ignored.
 ADMIN_ARGS = {
     "whoami": set(), "ledger": {"active_only"}, "thread": {"thread"}, "owed_close": {"ids", "reason"}, "owed": {"limit"}, "status": {"path"},
@@ -45,6 +45,7 @@ ADMIN_ARGS = {
     "wake_register": {"trigger", "session"},           # 0.24.0 (A-b2950 item 13): wake_pin removed (D-8ef51)
     "wake_verify": {"trigger", "prompt", "enabled", "session", "kind", "run_at"},
     "wake_disabled": {"trigger"},
+    "timer": {"id", "label", "ends_at", "extend_by", "visible", "state", "style", "owner_role", "kind", "link", "note"},   # 0.27.0: the Hub feed timer op
     "drift_explain": {"code_sha", "reason"},
     # 0.23.0 (A-08480 item 2): proctor case events; each action also rejects the keys it does not use (H.Harness.CASE_ARGS)
     "case": {"action", "case", "source", "severity", "magnitude", "family", "summary", "subject", "rule_ids", "rationale", "diff", "cause",
@@ -468,6 +469,12 @@ def admin(h, a):
     if op == "wake_verify":
         return h.wake_verify(caller_id(h, ag), x.get("trigger"), x.get("prompt"), x.get("enabled"), x.get("session"), x.get("kind"),
                              x.get("run_at"))
+    if op == "timer":   # 0.27.0: Hub feed timers (local file, no model); module scripts/hub_feed_op.py
+        import hub_feed_op
+        try:
+            return hub_feed_op.run_timer(h.home, x, time.time())
+        except ValueError as e:
+            raise H.HarnessError(str(e))
     if op == "wake_disabled":
         return h.wake_disabled(caller_id(h, ag), x.get("trigger"))
     if op == "pin_corpus_index":   # 0.15.1 (P3): envoy role direct, anyone else an approval request

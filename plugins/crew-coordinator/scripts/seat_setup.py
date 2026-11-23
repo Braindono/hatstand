@@ -33,6 +33,8 @@ SUDOERS_CHECK = [
     'if [ -L /etc/sudoers.d ] || [ ! -d /etc/sudoers.d ]; then /bin/rm -rf "$T"; echo "refused: /etc/sudoers.d is missing or a symlink"; exit 1; fi',
     'if ! /usr/bin/grep -Eq "^[#@]includedir[[:space:]]+(/private)?/etc/sudoers\\.d[[:space:]]*$" /etc/sudoers; then /bin/rm -rf "$T"; echo "refused: /etc/sudoers does not include /etc/sudoers.d, so the signer setting would not apply"; exit 1; fi',
     "printf '%s\\n' '" + SUDOERS_LINE + "' > \"$T/harness-grant.sudoers\"",
+    'if [ -L %s ]; then /bin/rm -rf "$T"; echo "refused: %s is a symlink"; exit 1; fi' % (SUDOERS_FILE, SUDOERS_FILE),
+    'if [ -e %s ] && ! /usr/bin/cmp -s %s "$T/harness-grant.sudoers"; then echo "refused: %s already exists and differs from the signer setting; its content:"; /bin/cat %s; /bin/rm -rf "$T"; exit 1; fi' % ((SUDOERS_FILE,) * 4),
     'if ! /usr/sbin/visudo -cf "$T/harness-grant.sudoers" >/dev/null 2>&1; then /bin/rm -rf "$T"; echo "refused: visudo rejected the signer sudo setting; nothing was installed"; exit 1; fi',
     'echo "sudo setting to be installed (one line, undo: sudo rm %s):"; /bin/cat "$T/harness-grant.sudoers"; (cd "$T" && /usr/bin/shasum -a 256 harness-grant.sudoers)' % SUDOERS_FILE]
 SUDOERS_INSTALL = ['/usr/bin/install -m 0440 -o root -g wheel "$T/harness-grant.sudoers" %s' % SUDOERS_FILE,

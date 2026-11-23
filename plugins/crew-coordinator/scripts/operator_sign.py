@@ -99,9 +99,12 @@ def human_ok(ev):
     return ev.get("seq", 0) <= cut or (ev.get("seq"), ev.get("hash")) in ok
 
 
-def request_file(home, kind, events, requester="harness", ttl=900):
-    """Write the canonical pending request; returns (request id, path, sha256). Helper re-reads these exact bytes."""
+def request_file(home, kind, events, requester="harness", ttl=900, detail=None):
+    """Write the canonical pending request; returns (request id, path, sha256). Helper re-reads these exact bytes.
+    0.27.0: an approval request carries detail {action, args}; the root helper shows it and checks it against the event's args digest."""
     req = {"v": 1, "kind": kind, "requester": requester, "created": int(time.time()), "expires": int(time.time()) + ttl, "events": events}
+    if detail is not None:
+        req["detail"] = detail
     raw = MAP.canonical(req).encode("utf-8")
     sha = hashlib.sha256(raw).hexdigest()
     d = os.path.join(home, "_harness", "operator-pending")

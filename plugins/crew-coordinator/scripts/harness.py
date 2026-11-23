@@ -7899,9 +7899,11 @@ class Harness:
         if not isinstance(args, dict):
             raise HarnessError("approval args must be an object")
         try:
-            json.loads(canon(args))
-        except Exception:
-            raise HarnessError("approval args must be plain JSON")
+            def _no_float(_):
+                raise ValueError("float")
+            json.loads(canon(args), parse_float=_no_float, parse_constant=_no_float)
+        except Exception as e:
+            raise HarnessError("approval args must be plain JSON" + ("; use strings or whole numbers: a float cannot be signed" if "float" in str(e) else ""))
         if action == "proctor_shadow" and not (isinstance(args.get("on"), bool) and set(args) <= {"on", "reason"}):
             raise HarnessError("proctor_shadow: args {on: true|false, reason}")
         if action in ("case_severity", "case_close") and str(args.get("case") or "") not in self.state().cases:
@@ -9818,7 +9820,7 @@ def _file_approval_request(h, aid, rec=None):
         raise HarnessError(f"{aid}: not found or not pending")
     rid, _p, _s = _opsign.request_file(h.home, "approve", [{"type": "approval.granted", "data": {
         "id": aid, "channel": "cli-tty", "by": "operator", "state": "granted", "args_digest": rec["args_digest"]}}],
-        requester=str(rec.get("caller"))[:8])
+        requester=str(rec.get("caller"))[:8], detail={"action": rec["action"], "args": rec.get("args") or {}})
     return rid
 
 
