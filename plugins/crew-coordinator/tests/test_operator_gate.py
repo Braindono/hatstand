@@ -97,6 +97,7 @@ class Gate(unittest.TestCase):
         import json as _j
         al = os.path.join(HERE, "..", "data", "role-aliases.json")
         self.assertEqual(H.role_alias_table.__name__, "role_alias_table")
+        saved_aliases = H._ROLE_ALIASES      # 0.27.2: put back the runner's pin, not None (None re-reads the file, which has no date now)
         H._ROLE_ALIASES = None
         orig = open(al).read()
         try:
@@ -105,7 +106,7 @@ class Gate(unittest.TestCase):
             H._ROLE_ALIASES = None
             self.assertNotIn("seat", H.role_alias_table()[0]); self.assertNotIn("operator", H.role_alias_table()[0])
         finally:
-            open(al, "w").write(orig); H._ROLE_ALIASES = None
+            open(al, "w").write(orig); H._ROLE_ALIASES = saved_aliases
         self.h.store._append_locked("role.assigned", self.a, {"role": "seat", "agent": self.a})       # unknown name: enforced anyway
         self.h.store._append_locked("role.assigned", self.a, {"role": "#Operator", "agent": self.a})
         st = self.h.state()

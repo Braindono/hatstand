@@ -27,7 +27,7 @@ class Housekeeping(Base):
         n = self.note(w)
         self.as_(steward)
         self.assertIn("pending", self.adm("pin", steward, ids=[d], reason='"the decision rule"'))          # a decision
-        self.assertIn("pending", self.adm("pin", steward, ids=[n, d], reason='"rule line text"'))           # one decision among routine ones
+        self.assertIn("pending", self.adm("pin", steward, ids=[n, d], reason='"rule line text" and "the decision rule"'))           # one decision among routine ones (0.27.2: the reason quotes each entry, or the request is refused when raised)
         self.assertIn("pinned", self.adm("pin", steward, ids=[n], reason='"rule line text"'))
         self.assertIn("pending", self.adm("pin", steward, ids=[n], reason='"rule line text"'))             # already pinned: not routine
         self.assertIn("pending", self.adm("pin", steward, ids=[n], off=True, reason='"rule line text"'))   # an unpin is never routine

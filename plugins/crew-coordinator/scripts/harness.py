@@ -200,7 +200,8 @@ def cr(name):
 
 def alias_today():
     """Today as the role-alias overlap sees it. One function so the test runner can pin the date (tests/_env.py): the older suites use the old role names."""
-    return time.strftime("%Y-%m-%d")
+    import dated_switches
+    return dated_switches.today()
 
 
 def cr_input(name):
@@ -208,8 +209,9 @@ def cr_input(name):
     new = cr(name)
     if isinstance(name, str) and new != name:
         until = role_alias_table()[1]
-        if until and alias_today() > until:
-            raise HarnessError(f"role '{name}' was renamed to '{new}' (the alias ended {until}); use {new}")
+        import dated_switches
+        if not dated_switches.is_on(until, alias_today(), "role-aliases until"):     # 0.27.2 (I3): empty = the overlap has ended
+            raise HarnessError(f"role '{name}' was renamed to '{new}' (the alias ended{' ' + until if until else ''}); use {new}")
     return new
 
 
@@ -5961,6 +5963,20 @@ class Harness:
                 acked.add(i)
         return acked
 
+    @staticmethod
+    def _agent_done(st, a):
+        return (st.agents.get(a) or {}).get("status") in ("superseded", "retired")
+
+    @classmethod
+    def _mechanical_row(cls, st, r):
+        """The one classifier of a mechanical prune (superseded capsule or completed note): the archive gate and the request-time check both call it."""
+        return r["kind"] in ("capsule", "note") and r["agent"] and cls._agent_done(st, r["agent"])
+
+    def _archive_rows(self, ids):
+        q = f"SELECT id,kind,project,agent,role,ts FROM entries WHERE id IN ({','.join('?' * len(ids))})"
+        return {r[0]: {"kind": r[1], "project": (r[2] or "").lower(), "agent": r[3], "role": r[4] or "", "ts": r[5] or ""}
+                for r in self.corpus.db.execute(q, ids)}
+
     def _archive_gate(self, st, actor, ids, reason, ack=None, approved=False, tier=False):
         """D-8b713(c): capsules of still-open handoffs (author not superseded, per the ledger: S7) are never archived.
         S6 (D-4ee13): a steward archives on its own only orchestration notes, superseded-agent capsules and
@@ -5968,10 +5984,8 @@ class Harness:
         mechanical (superseded capsule or completed note). Returns the reason to use."""
         if not ids:
             return reason
-        q = f"SELECT id,kind,project,agent,role,ts FROM entries WHERE id IN ({','.join('?' * len(ids))})"
-        rows = {r[0]: {"kind": r[1], "project": (r[2] or "").lower(), "agent": r[3], "role": r[4] or "", "ts": r[5] or ""}
-                for r in self.corpus.db.execute(q, ids)}
-        done = lambda a: (st.agents.get(a) or {}).get("status") in ("superseded", "retired")
+        rows = self._archive_rows(ids)
+        done = lambda a: self._agent_done(st, a)
         open_caps = [i for i, r in rows.items() if r["kind"] == "capsule" and r["agent"] and not done(r["agent"])]
         if open_caps:
             raise HarnessError(f"never archived: {open_caps} are capsules of open handoffs (author not superseded; D-8b713 c)")
@@ -5984,7 +5998,7 @@ class Harness:
                 owners = sorted({(cr(decs[i]["role"]) if decs[i]["role"] not in ("", "unassigned") else "envoy") for i in lack})
                 raise HarnessError(f"{lack} are decisions and need the owner's ack (role {', '.join(owners)}): "
                                    "the owner archives them, or pass ack=<message id from the owner>")
-        mech = lambda r: r["kind"] in ("capsule", "note") and r["agent"] and done(r["agent"])
+        mech = lambda r: self._mechanical_row(st, r)
         # round 3 F6: the approval-free housekeeping path (any housekeeping role, the envoy too) is held to the steward's tier
         if actor not in OPERATOR and (tier or st.role_of(actor) in [cr(x) for x in (load_config(self.home).get("steward_roles") or ["steward"])]):
             orphans = set()
@@ -7087,7 +7101,34 @@ class Harness:
             names = {base, base.rsplit(".", 1)[0]} - {"hooks"}
             if any(re.search(r"(?<![A-Za-z0-9_])" + re.escape(nm) + r"(?![A-Za-z0-9_])", text) for nm in names) and not any(g in x for x in items):
                 out.append(f"gate file {g} is described as changed but its path is not in any item: name it in an item so the approval covers it")
-        return out[:6] + acts[:12]
+        return out[:6] + cls._gate_phrase_warnings(items, candidate_tree, previous_tree)[:6] + acts[:12]
+
+    @classmethod
+    def _gate_phrase_warnings(cls, items, candidate_tree=None, previous_tree=None):
+        """0.27.2 (I4): each "Gate file changed:" element is compared exactly with the simulator's own release_sim GATE_FILES and GATE_FUNCS (as
+        path::function); with both trees, the gate files and functions that changed are compared with the phrases too. Never raises."""
+        try:
+            import release_sim as RS
+            gate = list(RS.GATE_FILES) + [f"{p}::{f}" for p, f in RS.GATE_FUNCS]
+        except Exception:
+            return ["gate phrase check skipped: release_sim.py cannot be imported; only the older gate-file check ran"]
+        out, named, phrase = [], set(), "Gate file changed: "
+        for el, rest in cls.scope_gate_phrases(items):
+            if el not in gate:
+                out.append(f"gate phrase names {el!r}, which matches no gate file or gate function (exact path, or path::function; no trailing text or period)")
+            else:
+                named.add(el)
+                if rest:
+                    out.append(f"gate phrase {el!r} is followed by other text ({_clean_text(rest, 40)!r}): end the item at the gate file name")
+        if candidate_tree and previous_tree:
+            try:
+                changed = [g for g in RS.GATE_FILES if RS._read(os.path.join(previous_tree, g)) != RS._read(os.path.join(str(candidate_tree), g))]
+                changed += [f"{p}::{f}" for p, f in RS.GATE_FUNCS if RS._func_src(os.path.join(previous_tree, p), f) != RS._func_src(os.path.join(str(candidate_tree), p), f)]
+            except Exception as e:
+                return out + [f"gate phrase tree check skipped: {_clean_text(str(e), 120)}"]
+            out += [f"gate phrase names {g} but it did not change in the candidate tree" for g in sorted(named - set(changed))]
+            out += [f"{g} changed in the candidate tree but no item says {phrase}{g}: add that exact phrase" for g in changed if g not in named]
+        return out
 
     def release_scope(self, by, plugin, version, items, rationale, approval_ref=None):
         """0.16.1 (item 8): record the operator-approved scope of one release: {plugin, version, items[], rationale,
@@ -7456,6 +7497,13 @@ class Harness:
     # ------------------------------------------------------------------ 0.22.0 release gate (spec v3: G, D) and drift check
     SCOPE_ACTIONS_RE = re.compile(r"approval actions? (?:added|removed):\s*([a-z0-9_, ]+)", re.I)
     SCOPE_GATE_RE = re.compile(r"gate files? changed:\s*([A-Za-z0-9_./:, -]+)", re.I)
+
+    @classmethod
+    def scope_gate_phrases(cls, items):
+        """0.27.2 (I4): -> [(element, text after the captured list)] for every "Gate file changed: ..." phrase in `items`: the gate's own SCOPE_GATE_RE and
+        the same comma split + strip that _release_gate applies (tests/test_0272_matrix.py checks the gate still reads them this way). Used by scope_warnings only."""
+        return [(x.strip(), str(it)[m.end():].strip()) for it in items for m in cls.SCOPE_GATE_RE.finditer(str(it))
+                for x in m.group(1).split(",") if x.strip()]
 
     def known_good_codes(self, st=None):
         """Published code shas only (critic S4 blocker 3: a gate pass is a log line anyone can append, never a known-good sha)."""
@@ -7921,6 +7969,8 @@ class Harness:
             raise HarnessError("proctor_shadow: args {on: true|false, reason}")
         if action in ("case_severity", "case_close") and str(args.get("case") or "") not in self.state().cases:
             raise HarnessError(f"{action}: no case {_clean_text(args.get('case'), 12)}")
+        if action in ("archive_operator", "pin_operator"):
+            self._check_reason_at_request(action, args)
         digest = self.approval_digest(action, args)
         recs = self._approval_records()
         self._expire_seen(recs)
@@ -7950,6 +8000,36 @@ class Harness:
         except Exception:
             pass
         return shape
+
+    def _check_reason_at_request(self, action, args):
+        """0.27.2 (I2): the reason check apply would run, run when the request is raised, so he never signs something that cannot run. Same
+        errors as apply: ids required, unknown ids, corpus check_reason (a quote from each entry); an empty archive reason passes only when
+        every entry is mechanical (the archive gate's own classifier). Apply keeps its own check."""
+        op = "archive" if action == "archive_operator" else ("pin" if args.get("on", True) else "unpin")
+        ids = args.get("ids")
+        ids = [i for i in (re.split(r"[,\s]+", ids) if isinstance(ids, str) and action == "archive_operator" else ids if isinstance(ids, list) else []) if i]
+        reason = args.get("reason") or ""
+        if not isinstance(reason, str) or not all(isinstance(i, str) for i in ids):
+            raise HarnessError(f"{op}: ids and reason must be text")
+        if not ids:
+            raise HarnessError(f"{'archive' if action == 'archive_operator' else 'pin'}: ids required")
+        self.corpus.refresh()
+        rows = self._archive_rows(ids)
+        miss = [i for i in ids if i not in rows]
+        if miss:
+            raise HarnessError(f"{'archive' if action == 'archive_operator' else 'pin'}: unknown ids {miss}")
+        mech = False
+        if action == "archive_operator":    # critic code round 1 B1: run apply's whole gate (open-handoff capsules, the owner's ack for D-*, the auto-fill), not only the reason
+            ack = args.get("ack")
+            if ack is not None and not (isinstance(ack, str) and re.fullmatch(r"m-[0-9a-f]{12}", ack)):
+                raise HarnessError("archive: ack must be a message id (m-<12 hex>)")
+            given = reason.strip()
+            reason = self._archive_gate(self.state(), "human", ids, reason, ack, approved=True)
+            mech = not given and bool(reason)
+        try:
+            self.corpus.check_reason(ids, reason, op, mechanical=mech)
+        except ValueError as e:
+            raise HarnessError(str(e))
 
     def _approval_ttl(self):
         try:
@@ -8799,6 +8879,11 @@ class Harness:
         try:    # 0.21.1 (A-58ff8 item 1): every sync, /refresh included, asks for the chat title until it is reported done or not_titled
             if st.title_pending(current):
                 do.append(self._title_text(st.expected_title(current)))
+        except Exception:
+            pass
+        try:    # 0.27.2 (I3): a config date 14 days or fewer away shows as a Do-line (no job to schedule)
+            import dated_switches
+            do += dated_switches.do_lines(self.home)
         except Exception:
             pass
 

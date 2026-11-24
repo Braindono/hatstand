@@ -14,22 +14,35 @@ import idcheck
 
 
 class T(unittest.TestCase):
-    def cfg(self, section, today, **over):
-        with mock.patch.object(G, "config_path", return_value=None), mock.patch.object(G, "warn"), \
-                mock.patch.object(time, "strftime", return_value=today):
-            G.load_config(section)
-            return dict(G.CFG)
+    def cfg(self, section, today, until=None):
+        """0.27.2 (I3): the shipped default carries no date (ended); a date comes only from gates.json, as his renewal."""
+        import tempfile
+        path = None
+        if until:
+            fd, path = tempfile.mkstemp(suffix=".json")
+            with os.fdopen(fd, "w") as f:
+                json.dump({section: {"observe_until": until}}, f)
+        try:
+            with mock.patch.object(G, "config_path", return_value=path), mock.patch.object(G, "warn"), \
+                    mock.patch.object(G.dated_switches, "today", return_value=today):
+                G.load_config(section)
+                return dict(G.CFG)
+        finally:
+            if path:
+                os.unlink(path)
 
     def test_ask_gate_observe_switches_itself_off_after_observe_until_in_both_sections(self):
         for sec in ("ask_gate", "harness"):
-            on = self.cfg(sec, "2026-11-13")
-            self.assertTrue(on["enabled"], sec)
-            self.assertEqual(on["observe_until"], "2026-11-20")
-            self.assertFalse(self.cfg(sec, "2026-11-21")["enabled"], sec)
+            self.assertEqual(self.cfg(sec, "2026-11-13")["observe_until"], "")              # shipped default: no date
+            self.assertFalse(self.cfg(sec, "2026-11-13")["enabled"], sec)                  # empty = ended
+            self.assertTrue(self.cfg(sec, "2026-11-13", "2026-11-20")["enabled"], sec)
+            self.assertTrue(self.cfg(sec, "2026-11-20", "2026-11-20")["enabled"], sec)
+            self.assertFalse(self.cfg(sec, "2026-11-21", "2026-11-20")["enabled"], sec)
 
     def test_idcheck_expires_after_its_date_and_a_config_date_renews_it(self):
-        self.assertFalse(idcheck.expired(today="2026-11-13"))
-        self.assertTrue(idcheck.expired(today="2026-11-21"))
+        self.assertTrue(idcheck.expired(today="2026-11-13"))                                 # shipped default: no date = ended
+        self.assertFalse(idcheck.expired("2026-11-20", today="2026-11-13"))
+        self.assertTrue(idcheck.expired("2026-11-20", today="2026-11-21"))
         self.assertFalse(idcheck.expired("2027-03-01", today="2026-11-21"))
 
     def test_the_harness_preferences_source_path_names_a_real_file_layout(self):

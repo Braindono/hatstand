@@ -20,12 +20,14 @@ import re
 import sys
 import time
 
+import dated_switches
+
 PREFIX_RE = re.compile(r"^(?:/Users/[^/]+|/home/[^/]+|/root|\$\{?HOME\}?|~)/Claude(?:/|$)")    # an absolute path under any home's Claude folder maps onto the roots
 CONFIG_REL = "Projects/Exchange/projects/secretary/gates.json"
 HARNESS_DEFAULTS = {
     "enabled": True,
     "mode": "observe",
-    "observe_until": "2026-11-20",      # item 38: observe mode switches itself off after this date (gates.json renews it); enforce mode is never auto-off
+    "observe_until": "",      # item 38 / 0.27.2: empty = observe period ended; a date lives only in gates.json (his renewal); enforce mode is never auto-off
     "sources": [
         {"label": "operator rules", "path": "Projects/Exchange/OPERATOR.md"},
         {"label": "harness operator preferences", "path": "Code/harness-ops/projects/orchestration/OPERATOR-PREFERENCES.md"},
@@ -42,7 +44,7 @@ HARNESS_DEFAULTS = {
 DEFAULTS = {
     "enabled": True,
     "mode": "observe",
-    "observe_until": "2026-11-20",
+    "observe_until": "",
     "career_roles": ["secretary", "letters-manager", "resume-manager", "listings-manager", "cv-management", "career-compass"],
     "sources": [
         {"label": "operator facts (single source)", "path": "Projects/CV_Management/*skills_repository.json"},
@@ -141,7 +143,7 @@ def load_config(section="ask_gate"):
     if cfg.get("mode") not in ("observe", "enforce"):
         cfg["mode"] = "observe"
     cfg["ended"] = False
-    if cfg["mode"] == "observe" and time.strftime("%Y-%m-%d") > cfg["observe_until"]:
+    if cfg["mode"] == "observe" and not dated_switches.is_on(cfg["observe_until"], dated_switches.today(), "ask_gate.observe_until"):
         cfg["enabled"], cfg["ended"] = False, True     # observe period over: silent until a person renews observe_until or switches to enforce
     mk = re.escape(cfg["bypass_marker"])
     MARK_RE = re.compile(mk + r"\s*([^\]]*)\]", re.I)

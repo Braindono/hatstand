@@ -154,7 +154,8 @@ class Housekeeping(unittest.TestCase):
         orch = t.h.record(w, "note", "an orchestration note", "rule line text", project="orchestration")["id"]
         self.assertIn("archived", t.adm("archive", envoy, ids=[orch], reason='"rule line text"'))        # inside the tier: no approval
         d = t.h.record(owner, "decision", "owned", "the decision rule")["id"]
-        self.assertIn("pending", t.adm("archive", envoy, ids=[d], reason='"the decision rule"'))         # a decision: never routine
+        ack = t.h.send(owner, envoy, f"ack archive {d}")["id"]                                      # 0.27.2: a decision without the owner's ack is refused when raised
+        self.assertIn("pending", t.adm("archive", envoy, ids=[d], reason='"the decision rule"', ack=ack))   # a decision: never routine
         n = t.note(w, title="another")
         self.assertIn("pinned", t.adm("pin", envoy, ids=[n], reason='"rule line text"'))
         self.assertIn("pending", t.adm("pin", envoy, ids=[n], reason='"rule line text"'))                # already pinned: not routine

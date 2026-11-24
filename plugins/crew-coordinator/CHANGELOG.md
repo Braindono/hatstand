@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.27.2: dated switches and request-time checks
+- The attach check (Hub publish toggle) runs as a log-only hook: it records what the host sends, and tells no agent anything until 0.27.3.
+- An archive or pin request is refused when raised if its reason does not quote a line from each entry, not only after he signs it.
+- Shipped code carries no future dates: observe periods and the role-alias overlap default to ended; dates live in his config; sync shows a Do-line 14 days before one lapses.
+- Filing a release scope warns when a gate-file phrase does not read exactly like a changed gate file or function of the simulator (trailing text, wrong set).
+- New curator release checklist (docs/RELEASE-CHECKLIST.md) and a hook-latency baseline tool (tools/hook_latency.py) with a synthetic ledger.
+- Gate file changed: hooks/hooks.json (one new PostToolUse hook for the attach check, log-only).
+
 ## 0.27.1: mistake capture the harness enforces
 - A record tagged `mistake` is refused unless it has the lines What, Found by, Model and Kind (claim or code) and exactly one tag of visible or hindsight; nothing is recorded when it is refused.
 - The harness adds the session path and transcript line to a mistake record from a hook on harness_record; an agent cannot set or leave out those lines, and if the hook did not run the record says so and is still filed.

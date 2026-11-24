@@ -88,5 +88,6 @@ if os.environ.get("CC_TEST_ISOLATED"):
     try:
         import harness as _H
         _H.alias_today = lambda: "2026-11-20"
+        _H._ROLE_ALIASES = (_H.role_alias_table()[0], "2026-11-21")      # 0.27.2 (I3): the shipped table has no date (empty = ended); the runner's overlap ends 11-21
     except Exception:
         pass

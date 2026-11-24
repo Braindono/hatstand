@@ -104,7 +104,7 @@ Answer: reexec (1 line) calls h.measure_flush() before the server.stopped event 
 
 ## Q-e8a35681 gate: hooks/hooks.json
 Gate file changed: hooks/hooks.json. How does the installed simulator still catch a bad tree with this change?
-Answer: hooks/hooks.json gains two entries for 0.27.1: a PreToolUse command mistake_pointer_hook.py on mcp__.*harness_record (timeout 5) and a UserPromptSubmit command correction_hook.py (timeout 5); no existing hook is touched. The installed simulator still catches a bad tree through its own checks on the scratch copy (setup, I1 to I9 including the critic's I7 with its gate-file rule I7c, which fails unless a scope item names hooks/hooks.json: the 0.27.1 scope does).
+Answer: hooks/hooks.json gains one entry for 0.27.2: a PostToolUse command attach_hook.py on matcher mcp__.*publish_files.*|Artifact (timeout 5); no existing hook is touched and no PostToolUseFailure entry is added. The installed simulator still catches a bad tree through its own checks on the scratch copy (setup, I1 to I9, including the gate-file rule I7c, which fails unless a scope item carries the exact phrase 'Gate file changed: hooks/hooks.json', and this release's scope has it). The attach hook decides nothing in 0.27.2: it writes shape lines and never prints.
 
 ## Q-110bb1ae gate: scripts/harness.py::publish_release
 Gate function changed: scripts/harness.py::publish_release. How does the installed simulator still catch a bad tree?
@@ -257,3 +257,39 @@ Answer: It writes <home>/_harness/mistake-pointers/<8-hex agent id>.json through
 ## Q-8985ecfe write: scripts/open_questions.py::_seen_locked#6a980903
 File write changed in scripts/open_questions.py::_seen_locked (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
 Answer: It rewrites <home>/_harness/open_questions.jsonl (key terms of recent questions, never the question text) through an exclusive no-follow temp file and os.replace under a flock on open_questions.jsonl.lock. The file belongs to this feature; rows that are not valid (bad time, not an object) are dropped on the rewrite; a symlink at the name is not read and is replaced, never followed.
+
+## Q-6fd7407a doline: scripts/harness.py::sync#51aacbf7
+Do-line text changed in scripts/harness.py::sync (5 line(s)). Which sender acts on it, and what if that sender lacks the tool it names?
+Answer: The new text is a sync Do-line, 'dated switch <name> ends <date> (in N days): renew it in the config or let it end', added by dated_switches.do_lines inside a try/except. The sender that acts on it is the agent that called harness_sync (the curator or the envoy, who owns renewals); it names no tool, only a config edit that the operator or the envoy makes. A sender without that access skips it: nothing breaks, the switch ends silently as designed, and the line shows only while a config date is 14 days or fewer away.
+
+## Q-6ae6d8c5 event: scripts/harness.py::request_approval#d48d3dcb
+store.append( call, or a function that holds one, changed in scripts/harness.py::request_approval (2 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: No event type and no payload field changed: request_approval still appends approval.requested with the same fields. The change only refuses an archive or pin request earlier, by running apply's own gate and reason check before the append. Readers of approval.requested are unaffected; docs/EVENTS.md is current (no new event, no new field).
+
+## Q-1cf5a81b event: scripts/harness.py::sync#51aacbf7
+store.append( call, or a function that holds one, changed in scripts/harness.py::sync (5 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: No event type and no payload field changed in sync: the 5 changed lines add the dated-switch Do-line text and read the same events. The append calls in sync keep their types and fields. docs/EVENTS.md is current (no new event, no new field).
+
+## Q-f45291b0 event: scripts/idcheck.py::ended_once#251ea6f6
+store.append( call, or a function that holds one, changed in scripts/idcheck.py::ended_once (4 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: No event payload changed: idcheck.ended_once still appends one hook.observe_end per (hook, agent, date) with the same fields. What changed is only how 'ended' is decided: dated_switches.is_on (on through the date, empty or malformed means ended) instead of a direct date comparison. docs/EVENTS.md is current.
+
+## Q-80907fa1 hook: PostToolUse::mcp__.*publish_files.*|Artifact::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/attach_hook.py"
+Hook changed: PostToolUse matcher 'mcp__.*publish_files.*|Artifact'. Which tool calls does it now see, and what if it fails?
+Answer: It sees every PostToolUse call whose tool name matches mcp__.*publish_files.* or is, or starts with, Artifact (the regex also matches ArtifactComments and ArtifactData, which write nothing). Only a publish that touches the attach marker file on the Hub artifact produces a line. If the hook fails (bad input, missing or locked home, any exception) it exits 0 and prints nothing, so no tool call is blocked or changed; a missing line is then the only effect.
+
+## Q-ed2b06fd write: scripts/attach_hook.py::_log#b19b196e
+File write changed in scripts/attach_hook.py::_log (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: _log appends one line to <home>/_harness/attach_failures.jsonl (created if missing, no-follow, mode 0600); it is called only when the attach messages are switched on (config attach_messages, off by default in 0.27.2), so nothing is written by default. An existing file keeps its lines; the new line is appended. A symlink at that name is refused; any error is swallowed.
+
+## Q-26098147 write: scripts/attach_hook.py::log_shape#06eac3b3
+File write changed in scripts/attach_hook.py::log_shape (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: log_shape appends one line (time, event, tool name, python type, key names, verdict; never response text) to <home>/_harness/attach_shapes.jsonl, created with mode 0600, no-follow, under a non-blocking flock. When the file passes 500 lines it rewrites the last 500 through a temp file and os.replace. The file is this feature's own; a missing or read-only home, a symlink or a locked file means no line and exit 0.
+
+## Q-77684c23 write: scripts/attach_state.py::record#c2eb429d
+File write changed in scripts/attach_state.py::record (3 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: record writes <home>/_harness/attach_state.json (which operation the next attach toggle needs) through a temp file in the same folder and os.replace, creating the folder if missing. Only this file is replaced; other files in _harness are not touched. In 0.27.2 it is reached only when attach messages are on, so by default nothing is written.
+
+## Q-58b9ab13 write: scripts/dated_switches.py::warn_once#e676512b
+File write changed in scripts/dated_switches.py::warn_once (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: warn_once appends one line 'malformed date for <switch>: <value> (switch treated as ended)' to <home>/_harness/dated_switches.log, creating the folder if needed, only when that exact line is not already in the file; the file is this feature's own and an existing one keeps its lines. Any failure is silent and nothing goes to stdout.

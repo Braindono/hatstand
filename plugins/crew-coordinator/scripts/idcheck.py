@@ -3,13 +3,15 @@ up: unknown (or superseded) and "title does not match how it is cited" each prin
 id logs hook.idcheck (id, verdict, tokens). Never blocks. Pure functions: the hook in harness.py supplies the corpus rows."""
 import re
 
+import dated_switches
+
 ID_RE = re.compile(r"(?<![A-Za-z0-9_-])([DNCK]-[0-9a-f]{5})(?![0-9A-Za-z_])")
 EXEMPT = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 TOOL_RE = re.compile(r"harness_(send|record)$")           # any MCP prefix: mcp__plugin_crew-coordinator_crew-coordinator__ or mcp__crew-coordinator__
 STOP = frozenset("that this with from have been were will would should could about their there which when what into only also than then them they your "
                  "were does done more most some such very just like over under after before because while where whose these those each both "
                  "the and for are not you was but can has its".split())
-OBSERVE_UNTIL = "2026-11-20"      # item 38: observe mode ends here (config idcheck_observe_until renews it); after it the hook is silent
+OBSERVE_UNTIL = ""      # item 38 / 0.27.2: empty = observe period ended; config idcheck_observe_until holds his renewal date; after it the hook is silent
 LINE_UNKNOWN = "id check: %s not found (or superseded): copy ids from a tool result"
 LINE_MISMATCH = "id check: %s title does not match how you cite it"
 
@@ -68,14 +70,13 @@ def tokens(line):
 
 
 def expired(until=None, today=None):
-    import time
-    return (today or time.strftime("%Y-%m-%d")) > (until or OBSERVE_UNTIL)
+    return not dated_switches.is_on(until or OBSERVE_UNTIL, today or dated_switches.today(), "idcheck_observe_until")
 
 
 def ended_once(h, hook, aid, until, today=None):
     """Item 38: after the observe date a hook writes ONE hook.observe_ended event per day {hook, until} and nothing else. True when it wrote one."""
-    import os, time
-    day = today or time.strftime("%Y-%m-%d")
+    import os
+    day = today or dated_switches.today()
     mark = os.path.join(h.store.dir, "observe_ended_" + hook)
     try:
         with open(mark, encoding="utf-8") as f:

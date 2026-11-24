@@ -185,10 +185,8 @@ class Curation(Base):
         # an approved operator archive of a decision still needs the owner's ack (D-e52c6)
         plain = self.agent()
         self.as_(plain)
-        pid = self.adm("archive", plain, ids=[d], reason='"the decision rule"')["pending"]
-        out = self.approve(pid)
-        self.assertEqual(out["state"], "failed")
-        self.assertIn("ack", out["result"])
+        with self.assertRaisesRegex(H.HarnessError, "owner's ack"):      # 0.27.2 (critic B1): refused when raised, not after he signs
+            self.adm("archive", plain, ids=[d], reason='"the decision rule"')
         self.assertEqual([e for e in self.types("corpus.archived") if d in e["data"]["ids"]], [])
         ack = self.h.send(owner, plain, f"ack archive {d}")["id"]
         pid2 = self.adm("archive", plain, ids=[d], reason='"the decision rule"', ack=ack)["pending"]
