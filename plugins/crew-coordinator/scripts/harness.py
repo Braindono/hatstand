@@ -5128,6 +5128,24 @@ class Harness:
             return self._inline_capsule(card, rel, txt)
         return []
 
+    def _change_line(self, st, aid, role, cm_all=False):
+        """0.27.3 E: [line] or []: 'Changed since you last looked: ...' from artifact.versioned records the lineage did not
+        write, since the lineage's last sync, for the resources this role uses. [] without resources.json or a last sync."""
+        try:
+            import change_feed as CF
+            res = CF.load_resources(self.home)
+            if not res:
+                return []
+            lin = st.lineage(aid)
+            since = next(((st.agents.get(x) or {}).get("last_sync") or {} for x in lin if (st.agents.get(x) or {}).get("last_sync")), {}).get("ts")
+            recs = [{"path": v["path"], "ts": v["ts"], "by": (st.agents.get(v["by"]) or {}).get("sobriquet", (v["by"] or "")[:8]),
+                     "actor": v["by"], "note": v.get("note"), "version": v["version"]}
+                    for hs in st.history.values() for v in hs]
+            ln = CF.digest_line(recs, res, st.role_of(aid) or role, since, exclude_by=set(lin))
+            return [ln] if ln else []
+        except Exception:
+            return []
+
     def restore_digest(self, st, aid, role, moved, capsule=None):
         """B2: code-built digest, 0 model tokens. 9 sections in priority order, each with its own token cap;
         overflow -> '+N more → <where>'. Hard cap restore_budget (config, default 2000 tokens = chars/4) on everything above the inline capsule."""
@@ -5229,6 +5247,8 @@ class Harness:
         cm = sorted((v for hs in st.history.values() for v in hs if v["by"] in mine), key=lambda v: v["ts"], reverse=True)[:4]
         secs.append(("Recent commits", [f"{_clean_text(v['path'], 300)} v{v['version']} · {_clean_text(v.get('note'), 300) or '-'} · {v['ts'][5:16]}" for v in cm],
                      130, "harness_admin op=status"))
+        # 8b 0.27.3 E: one "Changed since you last looked" line (no model; nothing at all without _harness/resources.json)
+        secs.append(("Changed", self._change_line(st, aid, role, cm_all=True), 70, None))
         # 9 Latest capsule by the lineage (A2: newest status=open, independent of the state note; inline file <=1500t)
         # 0.24.0 (A-b2950 item 4.2): the proctor's digest has no capsule section (its role-state note stays)
         if role != "proctor":
@@ -5258,7 +5278,7 @@ class Harness:
                 used += t_
             out.append(f"▸ {title}" + ("" if (lines or (title == "Lessons" and lmeta)) else ": none"))
             fenced = bool(keep) and title in ("Role", "Operator preferences", "Role intent", "State note", "Last exchange", "Owes reply", "Unread mail", "Lessons",
-                                              "Decisions in force", "Transferred leases", "Recent commits", "Latest capsule")
+                                              "Decisions in force", "Transferred leases", "Recent commits", "Changed", "Latest capsule")
             lesson_blk = title == "Lessons" and bool(keep)
             if lesson_blk:   # 0.19.0 (R-122 part 3): curated lessons are their own block, not the peer fence
                 out.append(f"  {FENCE_OPEN}lesson approved by the operator, proposed by {lmeta[1] or 'operator'}: apply unless the operator says otherwise{FENCE_CLOSE}")
@@ -5633,6 +5653,43 @@ class Harness:
                 return True
         return False
 
+    def _pointer_gate(self, aid, capsule_text, mode, override=None):
+        """0.27.3 C1 (capture fix, piece 1): an Open-questions item that offers a choice needs a pointer (scripts/capsule_pointer.py). Same switch as the asks
+        gate (handoff_gate warn|block). -> a note for the reply, or None. Block with no override raises before anything is written. A checker error never blocks."""
+        try:
+            import capsule_pointer as CP
+            bad = CP.unpointed(capsule_text) if capsule_text else []
+        except Exception:
+            return None
+        if not bad:
+            return None
+        role = ""
+        try:
+            role = self.state().role_of(aid) or ""
+        except Exception:
+            pass
+        data = {"count": len(bad), "mode": mode, "role": role}
+        shown = "".join(f"\n  - {_clean_text(b.splitlines()[0], 80)}" for b in bad[:5])
+        if mode == "block" and not (override and str(override).strip()):
+            self.store.append("handoff.pointer_blocked", aid, data)
+            raise HarnessError(f"handoff refused (handoff_gate: block): {len(bad)} open question(s) offer a choice with no pointer{shown}\n"
+                               "Under each, give a file path, a P- proposal id (harness_propose), an https link, or write the options out (two or more lines), "
+                               "or pass gate_override=\"<reason>\" (logged). Nothing was written.")
+        if mode == "block":
+            self.store.append("handoff.gate_override", aid, {"count": len(bad), "source": "pointer", "reason": _clean_text(override, 200)})
+            return f"gate override logged ({len(bad)} open choice item(s) without a pointer)"
+        self.store.append("handoff.pointer_warn", aid, data)
+        return f"warning: {len(bad)} open question(s) offer a choice with no pointer (path, P- id, https link or the options written out){shown}"
+
+    def propose(self, agent, project, kind, title, items, recommended=None):
+        """0.27.3 C1 (piece 2): harness_propose. Saves the options or drafts shown to him; -> {id, path, text}."""
+        import proposals
+        aid = self.writer(self.state(), agent)
+        try:
+            return proposals.save(self.home, project, kind, title, items, recommended, "tool", self.store, aid)
+        except ValueError as e:
+            raise HarnessError(str(e))
+
     def _handoff_gate(self, st, aid, capsule_text, override=None):
         """0.17.0 (R-051a/b, R-080): run the vault writer (when on) and the untagged-asks gate BEFORE anything is written.
         -> (vault result | None, notes, warn text | None, gate summary | None). In block mode with untagged asks and no
@@ -5643,6 +5700,9 @@ class Harness:
         mode, cfg = self._gate_mode(), load_config(self.home)
         notes, warn, vres, prep = [], None, None, None
         count, source, listing, failed = 0, None, [], None
+        pnote = self._pointer_gate(aid, capsule_text, mode, override)   # 0.27.3 C1: a choice item with no pointer (warn, or block before anything is written)
+        if pnote:
+            notes.append(pnote)
         if vault.enabled(cfg):
             try:
                 prep = vault.prepare(self, aid)
@@ -5711,6 +5771,9 @@ class Harness:
             ctext = None
             try:
                 cm = str(capsule_md or "").strip()
+                if cm == "auto":
+                    cm = self._auto_capsule_text(self.writer(self.state(), agent), self.state().agents.get(self.writer(self.state(), agent)) or {})
+                    capsule_md = cm      # built once here; _handoff gets the text, and the ids gate reads it
                 if cm and "\n" not in cm and cm.endswith(".md"):
                     with open(self._home_file(self._resolve_in_home(cm), "capsule path"), "r", encoding="utf-8") as f:
                         ctext = f.read()
@@ -5728,6 +5791,16 @@ class Harness:
                     r["text"] += "\n" + line
         return r
 
+    def _auto_capsule_text(self, aid, a):
+        """0.27.3 (item 2): capsule_md="auto": scripts/auto_capsule.py reads the ledger, git (read only, in the project folder) and the open items."""
+        import auto_capsule
+        gdir = None
+        try:
+            gdir = project_dir(self.home, norm_project(a.get("project")))
+        except Exception:
+            gdir = None
+        return auto_capsule.build(self, aid, gdir)
+
     def _handoff(self, agent, capsule_md=None, to=None, release=False, state_note=None, gate_override=None):
         """One-call handoff. Validate first (A4 path/text, B2 budget, F4), then: state note once, capsule file
         (+commit, +record), release, send kind=handoff, marker event. A rejected capsule writes nothing."""
@@ -5744,6 +5817,8 @@ class Harness:
         if len(note_text) > self.NOTE_MAX:
             raise HarnessError(f"{len(note_text)} chars > {self.NOTE_MAX}")
         capsule_text, existing_rel, stamped = None, None, None
+        if str(capsule_md or "").strip() == "auto":   # 0.27.3 (item 2): built from the ledger, git and open items; then the same gates as any capsule
+            capsule_md = self._auto_capsule_text(aid, a)
         if capsule_md:
             cm = str(capsule_md).strip()
             if "\n" not in cm and cm.endswith(".md"):
@@ -8427,6 +8502,14 @@ class Harness:
                 self.ingest_mistake_spool()
             except Exception:
                 pass
+            try:   # 0.27.3 (item 1): spend samples spooled by ctx_hook
+                self.ingest_spend_spool()
+            except Exception:
+                pass
+            try:   # 0.27.3 (item 3, F3): subagents over 1.5x their written cap
+                self.scan_subagent_caps()
+            except Exception:
+                pass
             try:   # M6: the cue hook reads only lessons that are still approved (an edit or retag drops one)
                 self.write_cue_lessons()
             except Exception:
@@ -8927,6 +9010,8 @@ class Harness:
             ch.append(f"+{n_new - len(new_corpus)} more corpus (harness_recall)")
         if elsewhere:
             ch.append(f"+{elsewhere} elsewhere: harness_sync full=true")
+        if not do_only:     # 0.27.3 E: one line, at most five resources; nothing without resources.json
+            ch += self._change_line(st, aid, st.role_of(aid))
         try:    # 0.22.0 (item 7): a delivery alarm on mail this agent has not read yet
             import doorbell as _D
             ch += _D.alarm_lines(self, st, aid)
@@ -8970,6 +9055,23 @@ class Harness:
             return os.path.getmtime(disk_path_safe(key, self.home))
         except (OSError, TypeError):
             return float("inf")
+
+    def ingest_spend_spool(self):
+        """0.27.3 (item 1): spend samples from the ctx hook become spend.sample events (scripts/spend_meter.py); quota_pct is always null."""
+        import spend_meter as SM
+        st = self.state()
+        return SM.ingest(self.home, lambda sid: st.current(st.sessions[sid]) if st.sessions.get(sid) else None,
+                         lambda actor, data: self.store.append("spend.sample", actor, data))
+
+    def scan_subagent_caps(self, projects_dir=None):
+        """0.27.3 (item 3, F3): a subagent that reached 1.5x its written cap is filed as a candidate mistake (mistake_ingest.scan_caps)."""
+        import mistake_ingest as MI
+        st = self.state()
+
+        def file_(ag, title, body, tags):
+            body += "\nModel: " + str((st.agents.get(ag) or {}).get("model") or "unknown").splitlines()[0][:80]
+            return self._record(ag, "note", title, body, tags, _candidate=True)
+        return MI.scan_caps(self.home, lambda sid: st.sessions.get(sid), file_, projects_dir)
 
     CUE_SPOOL_MAX = 500   # lines per sync; the rest waits for the next one
 

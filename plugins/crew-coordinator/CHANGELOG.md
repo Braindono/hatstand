@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.27.3: refactor-efficiency patch (the one patch on the old code)
+- Spend meter: each chat's counted tokens (input, output and both cache kinds) are written to the ledger as `spend.sample` events, at most one per 10 minutes. The quota percent field is null in every sample: no source for it exists, so none is guessed. The context gauge is unchanged (it still leaves out output tokens).
+- Auto-capsule: `harness_handoff capsule_md="auto"` builds the successor's capsule from the ledger, read-only git and open items; the 1,500-token cap and every existing handoff gate still apply to it.
+- Subagent cap overrun (F3): a launcher writes a cap file for a subagent (`scripts/subagent_cap.py`); at sync a subagent at 1.5x its token or call cap is filed as one candidate mistake. Nothing launches subagents from this plugin yet: until the delegation plugin writes cap files, the scan finds none.
+- Wake batching (F6): several recipients of one send that need different wake routes get one step set per route, with one report per recipient; a relay ring goes to the smallest live chat (lowest recorded context size). No ring rule, cap or hold changed.
+- Capture fix: a handoff capsule open question that offers a choice needs a pointer (a path, a P- proposal id, a link, or its options written out); the check starts in warn mode and never blocks until it is switched. `harness_propose` saves the options or drafts shown to him as a proposal file with a P- id; a hook saves every AskUserQuestion with his answer. The weekly pointer count function exists, but nothing calls it yet (the daily audit is planned for 0.28). The Hub card writer is not changed here.
+- Transcript distiller: decisions, rationales, proposals, insights and asks are extracted by rules from indexed transcripts into a local ledger (`ledger/decisions/<month>.jsonl`), the model only tags them from a closed set, and every quote is verified. An expiry sweep script (dry run available) distils registered sessions at day 25 of the 30-day expiry; unregistered sessions are counted and never read; a launchd plist is shipped as a file and is not installed.
+- Per-role loading: tested, needs no build: a per-folder settings.json switches plugins off (include the claude.ai synced copy's key too). No role-to-skills map is built.
+- dreams_guard: a PreToolUse hook refuses writes under the lucid dreams folder from any working folder but the lucid one; reads stay allowed. A Bash check guards against stray writes only and is not a sandbox. Refusals are logged as `dreams.write_refused`.
+- Change awareness, interim: `scripts/change_feed.py` builds a generated changes list beside CHANGES.md from `artifact.versioned` events and a seeded resources list (`docs/resources.sample.json`; copy it to the harness folder to switch it on), and the restore digest and sync show one "Changed since you last looked" line. No model is used.
+- Gate file changed: hooks/hooks.json (two new hooks: the dreams_guard PreToolUse hook and the AskUserQuestion capture PostToolUse hook).
+
 ## 0.27.2: dated switches and request-time checks
 - The attach check (Hub publish toggle) runs as a log-only hook: it records what the host sends, and tells no agent anything until 0.27.3.
 - An archive or pin request is refused when raised if its reason does not quote a line from each entry, not only after he signs it.

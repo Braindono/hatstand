@@ -104,7 +104,7 @@ Answer: reexec (1 line) calls h.measure_flush() before the server.stopped event 
 
 ## Q-e8a35681 gate: hooks/hooks.json
 Gate file changed: hooks/hooks.json. How does the installed simulator still catch a bad tree with this change?
-Answer: hooks/hooks.json gains one entry for 0.27.2: a PostToolUse command attach_hook.py on matcher mcp__.*publish_files.*|Artifact (timeout 5); no existing hook is touched and no PostToolUseFailure entry is added. The installed simulator still catches a bad tree through its own checks on the scratch copy (setup, I1 to I9, including the gate-file rule I7c, which fails unless a scope item carries the exact phrase 'Gate file changed: hooks/hooks.json', and this release's scope has it). The attach hook decides nothing in 0.27.2: it writes shape lines and never prints.
+Answer: hooks/hooks.json gains two entries in 0.27.3: PreToolUse scripts/dreams_guard.py (matcher Write|Edit|MultiEdit|NotebookEdit|Bash, timeout 5, fail-open: any error logs to <state dir>/dreams-guard.log and the call goes through; it only denies writes under the 99_dreams folder from a session outside the lucid project folder) and PostToolUse scripts/propose_hook.py (matcher AskUserQuestion, timeout 10, always exits 0); no existing entry is touched. The installed simulator still catches a bad tree through its own checks on a scratch copy (setup, I1 to I9, the hooks.json sha pin test, and hatstand_guard), and the gate-file rule requires a scope item with the phrase 'Gate file changed: hooks/hooks.json', which this release's scope carries.
 
 ## Q-110bb1ae gate: scripts/harness.py::publish_release
 Gate function changed: scripts/harness.py::publish_release. How does the installed simulator still catch a bad tree?
@@ -293,3 +293,105 @@ Answer: record writes <home>/_harness/attach_state.json (which operation the nex
 ## Q-58b9ab13 write: scripts/dated_switches.py::warn_once#e676512b
 File write changed in scripts/dated_switches.py::warn_once (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
 Answer: warn_once appends one line 'malformed date for <switch>: <value> (switch treated as ended)' to <home>/_harness/dated_switches.log, creating the folder if needed, only when that exact line is not already in the file; the file is this feature's own and an existing one keeps its lines. Any failure is silent and nothing goes to stdout.
+
+## 0.27.3
+
+## Q-e4317e38 doline: scripts/harness.py::sync#0855d02f
+Do-line text changed in scripts/harness.py::sync (10 line(s)). Which sender acts on it, and what if that sender lacks the tool it names?
+Answer: The only text 0.27.3 adds in sync is one line in the Changed list, 'Changed since you last looked: <resource> (<summary>); ...' from change_feed.digest_line via _change_line (skipped when do_only, so /refresh never shows it). It sits under Changed, not under Do:, and it names no tool; the sender is the agent that called harness_sync itself, which by definition holds that tool. If the caller ignores it nothing breaks; without <exchange>/_harness/resources.json or a last-sync time the line is empty and nothing is printed.
+
+## Q-a3f033f7 event: dreams.write_refused
+Event type dreams.write_refused added. Who reads it, and is docs/EVENTS.md current?
+Answer: dreams.write_refused (agent, session_id, tool, path, cwd; never file content) is written by scripts/dreams_guard.py::record when the guard denies a write under the 99_dreams folder from a session whose cwd is not the lucid project folder. Readers in code: none found by grep of scripts/ (tests/test_0273_cluster_c_d reads it in test_0273_cluster_d.py only); docs/EVENTS.md says a check 'no write from another project' counts these rows, and that check's location is unverified. docs/EVENTS.md is current: it has the dreams.write_refused row (line 178).
+
+## Q-03e1e878 event: handoff.pointer_blocked
+Event type handoff.pointer_blocked added. Who reads it, and is docs/EVENTS.md current?
+Answer: handoff.pointer_blocked (count, mode, role) is written by Harness._pointer_gate in block mode when a capsule's Open questions offer a choice with no pointer and no gate_override is given; the handoff then raises and nothing is written. Reader: capsule_pointer.pointer_audit (counts it per role, with handoff.pointer_warn); in scripts/ nothing else calls it, so it is an audit event for the operator and tests. docs/EVENTS.md is current: line 176 has a row for handoff.pointer_warn and handoff.pointer_blocked.
+
+## Q-a74e01e6 event: handoff.pointer_warn
+Event type handoff.pointer_warn added. Who reads it, and is docs/EVENTS.md current?
+Answer: handoff.pointer_warn (count, mode, role) is written by Harness._pointer_gate in warn mode (the default switch, config handoff_gate) when a capsule's Open questions offer a choice with no pointer; the handoff is still written and the reply carries a warning note. Reader: capsule_pointer.pointer_audit counts it per role; no other code reader by grep, so it is an audit event. docs/EVENTS.md is current: line 176 has the shared row for pointer_warn and pointer_blocked.
+
+## Q-9b1920fc event: proposal.saved
+Event type proposal.saved added. Who reads it, and is docs/EVENTS.md current?
+Answer: proposal.saved (id, project, kind, source, n; ids and a count, no text) is appended by proposals.save when a store is passed, from harness_propose (source tool) and propose_hook.py (source hook). Readers in code: none found by grep of scripts/ and tests/ beyond the test that asserts it (test_0273_cluster_c1.py); it is an audit event for the operator. docs/EVENTS.md is current: line 177 has the proposal.saved row.
+
+## Q-f1984f0d event: scripts/dreams_guard.py::record#cf06447c
+store.append( call, or a function that holds one, changed in scripts/dreams_guard.py::record (12 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: record() is new in 0.27.3 and holds the only append of dreams.write_refused, payload agent, session_id, tool, path, cwd (actor is the agent bound to the session, else system); it is best effort and a failure logs one line to <state dir>/dreams-guard.log and never raises. Readers in code: none by grep of scripts/; docs/EVENTS.md says a check counts the rows (check location unverified). docs/EVENTS.md is current: row at line 178 lists exactly those fields.
+
+## Q-1b744d6b event: scripts/harness.py::_handoff#056f729f
+store.append( call, or a function that holds one, changed in scripts/harness.py::_handoff (2 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: The 2 changed lines in _handoff only call the new _pointer_gate and add its note to the reply; _handoff has no store.append of its own, and the payloads of the events it reaches (handoff.gate_* via _handoff_gate, handoff.pointer_* via _pointer_gate) are unchanged except the new pointer events. Readers: pointer events by capsule_pointer.pointer_audit; handoff.gate_warn, gate_blocked and gate_override by scripts/weekly_report.py. docs/EVENTS.md is current for the pointer row (line 176); it has no separate rows for the older handoff.gate_* types by grep, which predate 0.27.3.
+
+## Q-8b5071ff event: scripts/harness.py::_handoff_gate#235ac00d
+store.append( call, or a function that holds one, changed in scripts/harness.py::_handoff_gate (3 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: The 3 changed lines in _handoff_gate call _pointer_gate before the vault and asks gate and add its note; the existing appends (handoff.gate_warn, handoff.gate_blocked, handoff.gate_override) keep their fields. Readers: scripts/weekly_report.py counts those three types; the new pointer events are read by capsule_pointer.pointer_audit. docs/EVENTS.md has the pointer row (line 176) but no own rows for the older handoff.gate_* types by grep, so nothing is stale for this change.
+
+## Q-620f7eb8 event: scripts/harness.py::_pointer_gate#09cbbf81
+store.append( call, or a function that holds one, changed in scripts/harness.py::_pointer_gate (27 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: _pointer_gate is new and holds three appends: handoff.pointer_blocked and handoff.pointer_warn (count, mode, role) and, for a logged block override, handoff.gate_override (count, source 'pointer', reason cut to 200 chars). Readers: capsule_pointer.pointer_audit for the two pointer events, scripts/weekly_report.py for gate_override; a checker error returns None and never blocks. docs/EVENTS.md is current: line 176 documents count, mode, role, and names the gate_override source pointer.
+
+## Q-46844f6d event: scripts/harness.py::ingest_spend_spool#6eec3475
+store.append( call, or a function that holds one, changed in scripts/harness.py::ingest_spend_spool (6 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: ingest_spend_spool is new: it hands <exchange>/_harness/spend_spool.jsonl to spend_meter.ingest, which appends one spend.sample per valid line (actor the bound agent, else system); sync calls it inside try/except, so a failure never breaks sync. Readers of spend.sample in code: none found by grep (only the ingest and tests/test_0273_cluster_a.py), so it is an audit and cost event for the operator. docs/EVENTS.md is current: line 175 has the spend.sample row.
+
+## Q-7c3f5fc8 event: scripts/harness.py::restore_digest#ab75bd93
+store.append( call, or a function that holds one, changed in scripts/harness.py::restore_digest (4 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: The 4 changed lines in restore_digest add a 'Changed' section (change_feed digest line, empty without resources.json) and list it among the sections kept; restore_digest holds no store.append and emits no new or changed event payload. Reader of the section: the restoring agent, in the digest text. docs/EVENTS.md needs no row for this, so it is current.
+
+## Q-84fe6566 event: scripts/harness.py::sync#0855d02f
+store.append( call, or a function that holds one, changed in scripts/harness.py::sync (10 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: sync gains two guarded calls, ingest_spend_spool (appends spend.sample) and scan_subagent_caps (files candidate mistake notes through _record, no new event type), plus the Changed line. spend.sample has no code reader besides tests (by grep) and is an audit event; the cap scan's notes are read like any other candidate mistake record. docs/EVENTS.md is current: spend.sample is at line 175.
+
+## Q-626fd54b event: scripts/proposals.py::save#f2620a3a
+store.append( call, or a function that holds one, changed in scripts/proposals.py::save (22 line(s)): a new field or changed payload on an event type. Who reads it, and is docs/EVENTS.md current?
+Answer: save is new and appends proposal.saved with id (P-xxxxx), project, kind (options or drafts), source (tool, hook or hub) and n, only when a store is given; callers are harness_propose (via Harness.propose) and propose_hook.py. Readers in code: none by grep beyond the test (test_0273_cluster_c1.py); the saved file under <exchange>/projects/<project>/proposals/ is what people read. docs/EVENTS.md is current: line 177 has the row.
+
+## Q-21c21c7c event: spend.sample
+Event type spend.sample added. Who reads it, and is docs/EVENTS.md current?
+Answer: spend.sample (agent, session_id, unit, tokens, in, out, cache_w, cache_r, quota_pct always null) is written by Harness.ingest_spend_spool on each sync from the spool the ctx_hook fills (at most one sample per chat per 10 minutes). Readers in code: none found by grep of scripts/ (only tests); it is an audit event for the operator, counts only. docs/EVENTS.md is current: line 175 has the spend.sample row.
+
+## Q-5e845e91 hook: PostToolUse::AskUserQuestion::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/propose_hook.py"
+Hook changed: PostToolUse matcher 'AskUserQuestion'. Which tool calls does it now see, and what if it fails?
+Answer: It sees only completed AskUserQuestion calls (the run() check also accepts mcp__*__AskUserQuestion names, though the matcher is the bare name) and saves the questions, options and his answer as one proposal file under <exchange>/projects/<project>/proposals/ with source hook, plus a proposal.saved event. On any failure (bad JSON, unreachable ledger, no project) it exits 0 silently, so the tool call is never affected and the proposal is simply not saved; timeout is 10 s.
+
+## Q-00b5a651 hook: PreToolUse::Write|Edit|MultiEdit|NotebookEdit|Bash::python3 "${CLAUDE_PLUGIN_ROOT}/scripts/dreams_guard.py"
+Hook changed: PreToolUse matcher 'Write|Edit|MultiEdit|NotebookEdit|Bash'. Which tool calls does it now see, and what if it fails?
+Answer: It sees every Write, Edit, MultiEdit, NotebookEdit and Bash call before it runs, but acts only when the resolved path is under the 99_dreams folder and the session cwd is not inside the lucid project folder; then it appends dreams.write_refused and returns a deny with the reason. Reads are never blocked. It fails open: any error logs one line to <state dir>/dreams-guard.log and exits 0 so the call proceeds; it is a stray-write guard, not a sandbox (xargs, bash -c, interpreter one-liners and command substitution are not seen), timeout 5 s.
+
+## Q-ddf5c4bc write: scripts/change_feed.py::write_generated#ca00a626
+File write changed in scripts/change_feed.py::write_generated (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It writes <exchange>/CHANGES.generated.md (or the --out path) with plain open(path, 'w'), so an existing generated file is replaced in whole, not appended and not atomic. The hand-written CHANGES.md is protected: a target whose basename is CHANGES.md raises ValueError and nothing is written; without <exchange>/_harness/resources.json it returns None and writes nothing. It only runs when someone calls the CLI 'change_feed.py render'; nothing runs at install.
+
+## Q-14c3693d write: scripts/dreams_guard.py::log#4f984e42
+File write changed in scripts/dreams_guard.py::log (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It appends one line (timestamp plus message cut to 200 chars) to dreams-guard.log in $HARNESS_STATE_DIR, else the plugin state dir under the user's claude folder, creating the folder with mode 0700. It is append-only, so existing log lines are kept; any write error is swallowed. The log is read by the operator when the guard fails open; no code reads it.
+
+## Q-67e41508 write: scripts/expiry_sweep.py::save_state#f9acbfed
+File write changed in scripts/expiry_sweep.py::save_state (3 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It writes <exchange>/_harness/expiry_sweep.json (last distilled block line per session file) through a temp file expiry_sweep.json.tmp and os.replace, so an existing file is replaced atomically with the merged state. Only expiry_sweep.run reads it, and a dry run never calls it; the script is shipped but not scheduled by this release. A corrupt or foreign file there is treated as empty by load_state (unverified in detail) and then overwritten.
+
+## Q-ba20543d write: scripts/mistake_ingest.py::scan_caps#77fc2d3b
+File write changed in scripts/mistake_ingest.py::scan_caps (1 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It writes empty done-mark files <exchange>/_harness/mistake_seen/cap-<session>-<subagent>.filed, created with O_CREAT|O_EXCL|O_NOFOLLOW, mode 0600, after the candidate mistake note is filed through the record callback. If the mark already exists that overrun is skipped (never filed twice); if mistake_seen is a symlink the scan returns 0 and writes nothing. sync calls it, read by the same function next sync.
+
+## Q-696d19c4 write: scripts/proposals.py::save#3d8d5ff2
+File write changed in scripts/proposals.py::save (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It writes <exchange>/projects/<project>/proposals/<yyyy-mm-dd>_<slug>.md, creating the folder if needed. If that name exists it never overwrites: it tries <name>-2.md, -3.md and so on, so earlier proposals and any local file there are left intact. The file is read by the operator and by harness_propose callers via find/load by its P- id.
+
+## Q-f0815c67 write: scripts/spend_meter.py::ingest#cd8190e8
+File write changed in scripts/spend_meter.py::ingest (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It renames <exchange>/_harness/spend_spool.jsonl to spend_spool.claimed, turns the lines into spend.sample events, then deletes the claimed file; lines past the per-sync limit are written back by appending to a fresh spend_spool.jsonl (O_APPEND, O_NOFOLLOW, mode 0600). If a claimed file already exists it is read first and the spool is left alone; if either path is a symlink it does nothing, so a foreign file is never followed.
+
+## Q-188e7161 write: scripts/spend_meter.py::sample#54815d86
+File write changed in scripts/spend_meter.py::sample (3 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It appends one JSON line to <spool_dir>/spend_spool.jsonl (O_APPEND, O_NOFOLLOW, mode 0600, so existing lines are kept) and replaces the per-chat state file (harness-spend-<session>.json in the hook state dir) with a temp file and os.replace. It writes at most one sample per 10 minutes per chat and skips subagent transcripts; a missing transcript returns None without writing.
+
+## Q-c86da56d write: scripts/subagent_cap.py::write_cap#64ebb779
+File write changed in scripts/subagent_cap.py::write_cap (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It writes <exchange>/_harness/subagent_caps/<session>.<subagent>.json (folder mode 0700, file mode 0600, O_NOFOLLOW) with the label and caps. If the same file exists it is truncated and replaced (O_TRUNC), which is the intended refresh of a cap; a symlink at the path makes the open fail instead of being followed. Ids must match the id pattern and one positive cap is required or it raises ValueError before writing; read_caps ignores files older than the stale limit, and scan_caps in sync reads them.
+
+## Q-6db90f77 write: scripts/vault_decisions.py::write_ledger#c8e84e81
+File write changed in scripts/vault_decisions.py::write_ledger (2 line(s)). Which path does it write, and what if that path already holds local data the package does not own?
+Answer: It appends to <exchange>/ledger/decisions/<yyyy-mm>.jsonl (folder 0700, file 0600, O_APPEND), after reading the file to collect the (session, line, kind) keys already there. A rerun adds nothing, and existing lines, including local ones the package does not own, are never rewritten; an unreadable file is treated as empty and appended to. Only expiry_sweep.py calls it; the returned count is the number of new lines written.

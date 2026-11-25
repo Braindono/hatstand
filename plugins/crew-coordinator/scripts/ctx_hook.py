@@ -974,6 +974,13 @@ def main():
         CURRENT_ROLE = None
     ev = inp.get("hook_event_name") or "PostToolUse"
     msgs = []
+    try:   # 0.27.3 (item 1): the spend meter counts output tokens too; the gauge above is unchanged
+        import spend_meter
+        sd = os.path.join(os.environ.get("HARNESS_HOME") or default_home(), "_harness")
+        if os.path.isdir(sd):
+            spend_meter.sample(inp.get("session_id"), inp.get("transcript_path"), CURRENT_ROLE or "session", state_path(f"harness-spend-{_sid(inp)}.json"), sd, t)
+    except Exception as e:
+        _log("spend_meter", e)
     try:   # 0.19.0 (R-121): every model change the transcript shows
         record_model(inp)
     except Exception as e:

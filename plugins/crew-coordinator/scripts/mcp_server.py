@@ -197,8 +197,10 @@ TOOLS = [
      {"query": S, "ids": ARR, "kind": S, "tags": ARR, "project": S, "budget": I, "agent": A, "limit": I, "offset": I, "concept": S, "miss": S}, []),
     ("harness_restore", "/restore: take over a role in a fresh chat. Returns banner + digest. confirmed=true if the holder was seen <10 min ago. capsule=<Exchange path> shows that capsule instead of the lineage pick.",
      {"role": S, "model": S, "project": S, "task": S, "confirmed": B, "capsule": S, "agent": A, "approval": S}, ["role", "model"]),
-    ("harness_handoff", "One-call handoff: optional capsule_md file, state_note, kind=handoff (to defaults to operator). Leases stay for /restore unless release=true. Returns the bootstrap line.",
+    ("harness_handoff", "One-call handoff: optional capsule_md file (or 'auto': built from the ledger, git and open items), state_note, kind=handoff (to defaults to operator). Leases stay for /restore unless release=true. Returns the bootstrap line.",
      {"agent": A, "capsule_md": S, "state_note": S, "to": S, "release": B, "gate_override": S}, ["agent"]),
+    ("harness_propose", "Save options or drafts you show the operator, so a handoff cannot lose them. kind=options|drafts, items=[text each], recommended=label of your pick. Returns a P- id (cite it in the capsule's open question) and the text to show.",
+     {"agent": A, "project": S, "kind": S, "title": S, "items": ARR, "recommended": S}, ["agent", "project", "kind", "title", "items"]),
 
     ("harness_admin", "ops: " + ",".join(ADMIN_OPS) + ". args per protocol skill.",
      {"op": S, "agent": S, "args": {"type": "object"}}, ["op"]),
@@ -583,7 +585,7 @@ def _send_key(a):
     return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
 
 
-WRITE_TOOLS = ("harness_send", "harness_record", "harness_commit", "harness_task_update", "harness_claim", "harness_handoff")
+WRITE_TOOLS = ("harness_send", "harness_record", "harness_commit", "harness_task_update", "harness_claim", "harness_handoff", "harness_propose")
 _FAILED_SEEN = {}      # agent short id -> recent failure timestamps (rate cap)
 FAILED_PER_MIN = 3
 
@@ -926,6 +928,8 @@ def _call(h, name, a):
         return (h.handoff(a["agent"], a.get("capsule_md"), a.get("to"), a.get("release", False), a.get("state_note"),
                           gate_override=a.get("gate_override"), ids_check=True))   # 0.24.0 item 1: write and flag
 
+    if name == "harness_propose":
+        return h.propose(a["agent"], a["project"], a["kind"], a["title"], a.get("items"), a.get("recommended"))
     if name == "harness_verify":
         return h.verify()
     if name == "harness_export":

@@ -67,6 +67,16 @@
         ]
       },
       {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/dreams_guard.py\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "mcp__.*harness_record",
         "hooks": [
           {
@@ -133,6 +143,16 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/harness.py\" hook idcheck",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/propose_hook.py\"",
             "timeout": 10
           }
         ]

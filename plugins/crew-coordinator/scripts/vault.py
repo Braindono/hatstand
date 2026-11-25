@@ -15,6 +15,8 @@ Rules (plan v2 stage 2, critic points 2-5; curator spec 2026-10-24-stage2-contex
   * model unavailable / error / not on the claude.ai subscription: the file is still written with every ask
     `untagged`, and the result says why (the handoff proceeds with a warning)
   * model runs on the Claude subscription only (D-4c27a): auth must be claude.ai, API-key variables are removed
+The decision ledger (0.27.3 C2) lives in vault_decisions.py, which reuses `verify`, `parse_tags` and `redact_out` from here.
+This file is over 300 lines (grown over releases, 0.17 on); splitting the rest is a refactor of the whole writer.
 """
 import json
 import os
@@ -31,7 +33,8 @@ import transcript_indexer as TI          # noqa: E402  redact() and the indexer 
 from corpus import clean_text, est_tokens  # noqa: E402
 
 TAGS = ("done", "open", "dropped", "backlog")
-NEEDS = {"done": (), "dropped": ("reason",), "backlog": ("id", "reason"), "open": ()}   # live backfill 10-25: "done" with no reason is a valid tag
+NEEDS = {"done": (), "dropped": ("reason",), "backlog": ("id", "reason"), "open": (),
+         "settled": (), "superseded": (), "unclear": ()}   # live backfill 10-25: "done" with no reason is a valid tag
 CORPUS_ID = re.compile(r"^[A-Z]-[0-9a-f]{5}$")
 REG_ID = re.compile(r"^[RH]-\d{3}[a-z]?$")
 ANY_ID = re.compile(r"\b(?:[A-Z]-[0-9a-f]{5}|[RH]-\d{3}[a-z]?)\b")
@@ -276,7 +279,7 @@ def claude_cli(prompt, model, run=None):
     return str(j.get("result") or "")
 
 
-def parse_tags(raw, n):
+def parse_tags(raw, n, tags=TAGS):
     """Model output -> {k: {tag, id, reason, correction}} for 1..n. Anything off-vocabulary is ignored (ask stays
     untagged). Raises ValueError when there is no JSON object at all."""
     m = re.search(r"\{[\s\S]*\}", raw or "")
@@ -291,7 +294,7 @@ def parse_tags(raw, n):
         if not isinstance(r, dict):
             continue
         k, tag = r.get("n"), r.get("tag")
-        if not isinstance(k, int) or isinstance(k, bool) or not (1 <= k <= n) or tag not in TAGS or k in out:
+        if not isinstance(k, int) or isinstance(k, bool) or not (1 <= k <= n) or tag not in tags or k in out:
             continue
         cid = r.get("id") if isinstance(r.get("id"), str) else ""
         reason = r.get("reason") if isinstance(r.get("reason"), str) else ""

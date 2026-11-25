@@ -164,7 +164,7 @@ class LegacyGate(Base):            # step 6
         names = [t["name"] for t in M.tool_list()]
         self.assertEqual(names, ["harness_register", "harness_sync", "harness_send", "harness_inbox", "harness_claim",
                                  "harness_release", "harness_commit", "harness_record", "harness_recall",
-                                 "harness_restore", "harness_handoff", "harness_admin"])
+                                 "harness_restore", "harness_handoff", "harness_propose", "harness_admin"])
         self.assertFalse(set(names) & set(M.LEGACY_TOOLS))
         self.assertEqual(len(M.LEGACY_TOOLS), 10)
 

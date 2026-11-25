@@ -10,6 +10,7 @@ Design: plans/2026-10-14_h020-doorbell-design-and-test-plan.md; spec 2026-10-15-
 - A wake may run harness_inbox and routine coordination only; wake_guard() refuses everything gated.
 All reads scan the ledger tail (bounded by the window), so a call costs O(recent events)."""
 import json, os, re, time
+from wake_batch import group_by_shape, paired_trigs, smallest_first     # 0.27.3 B (F6)
 
 SYSTEM_SENDER = "system"     # 0.25.0 item 39 (same value as harness.SYSTEM_SENDER): alarm-scan and script notices
 
@@ -681,9 +682,12 @@ def _do_many(ring, line, mid, st):
         hids = list(dict.fromkeys(x for x, _ in items if x))
         trigs = list(dict.fromkeys(g for _, g in items if g))
         out = _do_one(" and ".join(hids) + (" (one send each, the same text)" if len(hids) > 1 else "") if hids else None,
-                      " and ".join(trigs) if trigs else None, line, mid, fields=any(fld(g) for g in trigs))
-    else:
-        out = " ; ".join(dict.fromkeys(_do_one(x, g, line, mid, fields=fld(g)) for x, g in items))
+                      (paired_trigs(items) if hids and trigs else " and ".join(trigs)) if trigs else None, line, mid, fields=any(fld(g) for g in trigs))
+    else:       # 0.27.3 B (F6): one step set per route shape, not one per child (wake_batch.group_by_shape)
+        out = " ; ".join(_do_one(" and ".join(b["hids"]) + (" (one send each, the same text)" if len(b["hids"]) > 1 else "") if b["hids"] else None,
+                                 (paired_trigs([(x, g) for x, g in items if x in b["hids"] and g in b["trigs"]]) if b["hids"] and b["trigs"]
+                                  else " and ".join(b["trigs"])) if b["trigs"] else None, line, mid, fields=any(fld(t) for t in b["trigs"]))
+                         for b in group_by_shape(items))
     keys = list(dict.fromkeys(x if x else str(rid)[:8] for rid, _a, x, _g in ring))
     if out and len(keys) > 1:
         out = out.replace(f'args={{msg_id:"{mid}",outcome:', f'args={{msg_id:"{mid}",to:"<one of the to values>",outcome:')
@@ -1346,10 +1350,10 @@ def _relay_target(h, st, offer):
     gives it, so moving to the new form never costs a wake path the operator approved. Or None."""
     stale = _stale_ids(h)
     tos = list(offer.get("to") or [])
-    for to, hid in zip(tos, offer.get("hids") or []):
-        a = st.agents.get(to) or {}
-        if hid and hid.startswith("local_") and hid not in stale and st.role_of(to) and _same_machine(a, st):
-            return to, hid, None
+    pairs = [(to, hid) for to, hid in zip(tos, offer.get("hids") or [])
+             if hid and hid.startswith("local_") and hid not in stale and st.role_of(to) and _same_machine(st.agents.get(to) or {}, st)]
+    for to, hid in smallest_first(pairs, lambda p: (st.agents.get(p[0]) or {}).get("ctx")):     # 0.27.3 B (F6): the smallest live chat first
+        return to, hid, None
     for to in tos:
         role = st.role_of(to)
         if not role or st.role_holder(role) != to:

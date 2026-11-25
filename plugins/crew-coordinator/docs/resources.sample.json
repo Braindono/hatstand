@@ -1,0 +1,379 @@
+{
+ "_note": "SAMPLE. Prefixes are ledger keys (workspace folder name first). Copy to <home>/_harness/resources.json to enable.",
+ "resources": [
+  {
+   "id": "core",
+   "name": "CORE rules",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/CORE.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "intent",
+   "name": "INTENT",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/INTENT.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "knowledge-map",
+   "name": "KNOWLEDGE-MAP",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/KNOWLEDGE-MAP.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "rules-index",
+   "name": "rules INDEX",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/INDEX.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "urgency",
+   "name": "urgency rules",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/urgency.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "test-design",
+   "name": "test-design rules",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/test-design.md"
+   ],
+   "roles": [
+    "curator",
+    "harness-critic",
+    "ops-coder",
+    "critic"
+   ]
+  },
+  {
+   "id": "release-lessons",
+   "name": "release lessons",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/release-lessons.md"
+   ],
+   "roles": [
+    "curator",
+    "harness-critic",
+    "ops-coder",
+    "envoy"
+   ]
+  },
+  {
+   "id": "shared-docs",
+   "name": "shared-docs rules",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/shared-docs.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "role-envoy",
+   "name": "envoy role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/envoy.md"
+   ],
+   "roles": [
+    "envoy"
+   ]
+  },
+  {
+   "id": "role-curator",
+   "name": "curator role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/curator.md"
+   ],
+   "roles": [
+    "curator"
+   ]
+  },
+  {
+   "id": "role-ops-coder",
+   "name": "ops-coder role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/ops-coder.md"
+   ],
+   "roles": [
+    "ops-coder"
+   ]
+  },
+  {
+   "id": "role-harness-critic",
+   "name": "harness-critic role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/harness-critic.md"
+   ],
+   "roles": [
+    "harness-critic"
+   ]
+  },
+  {
+   "id": "role-guru",
+   "name": "guru role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/guru.md"
+   ],
+   "roles": [
+    "guru"
+   ]
+  },
+  {
+   "id": "role-critic",
+   "name": "critic role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/critic.md"
+   ],
+   "roles": [
+    "critic"
+   ]
+  },
+  {
+   "id": "role-design-system",
+   "name": "design-system role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/design-system.md"
+   ],
+   "roles": [
+    "design-system"
+   ]
+  },
+  {
+   "id": "role-design-coder",
+   "name": "design-coder role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/design-coder.md"
+   ],
+   "roles": [
+    "design-coder"
+   ]
+  },
+  {
+   "id": "role-dreamer",
+   "name": "dreamer role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/dreamer.md"
+   ],
+   "roles": [
+    "dreamer"
+   ]
+  },
+  {
+   "id": "role-detective",
+   "name": "detective role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/detective.md"
+   ],
+   "roles": [
+    "detective"
+   ]
+  },
+  {
+   "id": "role-researcher",
+   "name": "researcher role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/researcher.md"
+   ],
+   "roles": [
+    "researcher"
+   ]
+  },
+  {
+   "id": "role-proctor",
+   "name": "proctor role file",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/rules/roles/proctor.md"
+   ],
+   "roles": [
+    "proctor"
+   ]
+  },
+  {
+   "id": "operator",
+   "name": "OPERATOR.md",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/OPERATOR.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "virtues",
+   "name": "VIRTUES",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/VIRTUES.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "deliverables",
+   "name": "DELIVERABLES",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/DELIVERABLES.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "changes",
+   "name": "CHANGES (hand notes)",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/CHANGES.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "index",
+   "name": "INDEX",
+   "aliases": [],
+   "owner": "secretary",
+   "prefixes": [
+    "Exchange/INDEX.md"
+   ],
+   "roles": []
+  },
+  {
+   "id": "hub",
+   "name": "The Hub",
+   "aliases": [
+    "Work tab"
+   ],
+   "owner": "design-system",
+   "prefixes": [
+    "Exchange/projects/secretary/hub",
+    "Exchange/projects/design-system/hub"
+   ],
+   "roles": [
+    "secretary",
+    "envoy",
+    "design-system",
+    "design-coder"
+   ]
+  },
+  {
+   "id": "crew-coordinator",
+   "name": "crew-coordinator plugin",
+   "aliases": [],
+   "owner": "curator",
+   "prefixes": [
+    "crew-coordinator",
+    "Exchange/plugins/crew-coordinator"
+   ],
+   "roles": []
+  },
+  {
+   "id": "excellent-etiquette",
+   "name": "excellent-etiquette plugin",
+   "aliases": [],
+   "owner": "curator",
+   "prefixes": [
+    "excellent-etiquette"
+   ],
+   "roles": []
+  },
+  {
+   "id": "delegation-desk",
+   "name": "delegation-desk plugin",
+   "aliases": [],
+   "owner": "curator",
+   "prefixes": [
+    "delegation-desk"
+   ],
+   "roles": []
+  },
+  {
+   "id": "career-compass",
+   "name": "career-compass plugin",
+   "aliases": [],
+   "owner": "curator",
+   "prefixes": [
+    "career-compass"
+   ],
+   "roles": [
+    "cv-management",
+    "secretary",
+    "curator"
+   ]
+  },
+  {
+   "id": "plugin-publications",
+   "name": "plugin-publications plugin",
+   "aliases": [],
+   "owner": "curator",
+   "prefixes": [
+    "plugin-publications"
+   ],
+   "roles": [
+    "curator",
+    "envoy"
+   ]
+  },
+  {
+   "id": "pixel-pilot",
+   "name": "pixel-pilot plugin",
+   "aliases": [],
+   "owner": "curator",
+   "prefixes": [
+    "pixel-pilot"
+   ],
+   "roles": [
+    "design-system",
+    "design-coder",
+    "curator"
+   ]
+  }
+ ]
+}

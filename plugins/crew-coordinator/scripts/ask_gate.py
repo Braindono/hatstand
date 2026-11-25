@@ -21,6 +21,7 @@ import sys
 import time
 
 import dated_switches
+import ask_payload
 
 PREFIX_RE = re.compile(r"^(?:/Users/[^/]+|/home/[^/]+|/root|\$\{?HOME\}?|~)/Claude(?:/|$)")    # an absolute path under any home's Claude folder maps onto the roots
 CONFIG_REL = "Projects/Exchange/projects/secretary/gates.json"
@@ -336,9 +337,8 @@ def message_texts(d):
     if not isinstance(ti, dict):
         return []
     if name == "AskUserQuestion" or name.endswith("__AskUserQuestion"):
-        qs = ti.get("questions")
-        return ["\n".join(q.get("question", "") for q in qs if isinstance(q, dict)
-                          and isinstance(q.get("question"), str))] if isinstance(qs, list) else []
+        qs = ask_payload.question_texts(ti)
+        return ["\n".join(qs)] if qs else []
     is_msg = name == "SendUserMessage" or name.endswith("__SendUserMessage")
     if name.endswith("harness_send") and str(ti.get("to", "")).strip().lower() == "operator":
         is_msg = True
@@ -352,8 +352,7 @@ def pre(d):
     if name == "AskUserQuestion" or name.endswith("__AskUserQuestion"):
         ti = d.get("tool_input") or {}
         msg = None
-        for q in (ti.get("questions") or []) if isinstance(ti, dict) else []:
-            t = q.get("question") if isinstance(q, dict) else None
+        for t in ask_payload.question_texts(ti):
             if isinstance(t, str):
                 # AskUserQuestion texts are questions even without a trailing "?"
                 m = check_text(t if "?" in t else t + "?")
@@ -507,7 +506,7 @@ def main():
                     raise StopIteration
                 import harness as H, open_questions as OQ
                 home_ = H.Harness().home
-                for t_ in message_texts(d) if not (d.get("tool_name") or "").endswith("AskUserQuestion") else [q.get("question", "") for q in ((d.get("tool_input") or {}).get("questions") or []) if isinstance(q, dict)]:
+                for t_ in message_texts(d) if not (d.get("tool_name") or "").endswith("AskUserQuestion") else ask_payload.question_texts(d.get("tool_input")):
                     for q_ in extract_questions(t_ if "?" in t_ else t_ + "?"):
                         m_ = OQ.seen(home_, aid, role, OQ.topic_terms(q_))
                         if m_:

@@ -60,7 +60,7 @@ _CC = "plugins/crew-coordinator/"
 # one state-cache test. Path plus sha256; anything else with the shape stops the push.
 SHAPE_PINNED = {
     _CC + "data/hash-vectors.json": "26b000602ec96ab36a4c005e00d269936ddbe3e15aeee213c7e75341cd64c3fb",
-    _CC + "docs/EVENTS.md": "108b5f93330c7975cffab4cdd0d60cae5a4370bb34b85ac052e61709e33f9310",
+    _CC + "docs/EVENTS.md": "7bc00c47d27f81a474edd0ab3e60ecfceac4533b7fba03ebc2eab5019d5b4247",
     _CC + "scripts/hash_vectors.py": "b4349bca19d6e83a934345cbb9f62de9bfab32bb3149adc5ac470a4e59f3b416",
     _CC + "tests/test_cc161_state_cache.py": "889d98a22dd8c21bdb082e571ea708a973d252ca9691db027204cc9fa50eef45",
 }

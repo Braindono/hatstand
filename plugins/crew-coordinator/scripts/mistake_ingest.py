@@ -8,7 +8,7 @@ dropped (mistake_verify, ops-coder); the Session path in the record is always th
 (mistake_seen/<key>.filed) stops a double filing after a crash. No file is opened through a symlink."""
 import hashlib, json, os, time
 
-import mistake_pointer, mistake_verify
+import mistake_pointer, mistake_verify, subagent_cap
 
 def _clean(v, n):
     return str(v or "")[:n].replace("\n", " ").replace("\r", " ")
@@ -100,4 +100,34 @@ def ingest(home, resolve_agent, record_fn, projects_dir=None):
             os.unlink(claimed)
         except OSError:
             pass
+    return n
+
+
+def scan_caps(home, resolve_agent, record_fn, projects_dir=None):
+    """0.27.3 item 3 (F3): a subagent that reached 1.5x its written cap (subagent_cap) becomes one candidate mistake record, once (done mark
+    mistake_seen/cap-<session>-<subagent>.filed). The record says what overran, not who is to blame: a candidate, hindsight, Found by: script. -> number filed."""
+    seen = os.path.join(home, "_harness", "mistake_seen")
+    if os.path.islink(seen):
+        return 0
+    os.makedirs(seen, exist_ok=True)
+    n = 0
+    for h in subagent_cap.overruns(home, projects_dir):
+        c = h["cap"]
+        mark = os.path.join(seen, "cap-%s-%s.filed" % (c["session_id"], c["subagent"]))
+        agent = resolve_agent(c["session_id"])
+        if os.path.exists(mark) or not agent:
+            continue
+        body = "\n".join(["Act: subagent %s (%s) ran %d tokens and %d tool calls against a written cap of %s tokens and %s calls (%.1fx)." % (
+            _clean(c["subagent"], 40), _clean(c["label"], 40), h["tokens"], h["calls"], c["cap_tokens"] or "none", c["cap_calls"] or "none", h["ratio"]),
+            "Found by: script", "Kind: claim", "Session: " + h["path"], "Line: unknown",
+            "Candidate: filed at sync by the cap scan; the launching agent adds one description line."])
+        try:
+            record_fn(agent, "Subagent overran its cap %.1fx: %s" % (h["ratio"], _clean(c["label"] or c["subagent"], 50)), body, ["mistake", "hindsight", "candidate"])
+        except Exception:
+            continue
+        try:
+            os.close(os.open(mark, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+        except OSError:
+            pass
+        n += 1
     return n

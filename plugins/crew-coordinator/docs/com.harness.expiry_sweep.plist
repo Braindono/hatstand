@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 0.27.3 C2: daily expiry sweep. SHIPPED AS A FILE ONLY: not installed, not loaded by this release.
+     Copy to ~/Library/LaunchAgents and load it only on the operator's go, after replacing <home> in the paths with the full home folder path. The script path assumes expiry_sweep.py and its
+     imports (transcript_indexer.py, vault.py, decision_rules.py, corpus.py) sit together in the plugin scripts folder (unverified). -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.harness.expiry_sweep</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/bin/python3</string><string>&lt;home&gt;/Claude/scripts/expiry_sweep.py</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HARNESS_HOME</key><string>&lt;home&gt;/Claude/Projects/Exchange</string>
+  </dict>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>10</integer></dict>
+  <key>StandardOutPath</key><string>&lt;home&gt;/Library/Logs/harness-expiry-sweep.log</string>
+  <key>StandardErrorPath</key><string>&lt;home&gt;/Library/Logs/harness-expiry-sweep.log</string>
+</dict></plist>
