@@ -19,8 +19,8 @@
     {
       "name": "excellent-etiquette",
       "source": "./plugins/excellent-etiquette",
-      "version": "0.3.0",
-      "description": "Domain skills (delegation, plugins, cv-writing, design-rules) and the /swarm, /argue and /song commands; five retired pointer skills; the general operator rules live in CORE.md and the role rule files."
+      "version": "0.3.1",
+      "description": "Domain skills (delegation, plugins, cv-writing, design-rules) and the /swarm, /argue and /song commands; the general operator rules live in CORE.md and the role rule files."
     },
     {
       "name": "pixel-pilot",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 (2026-11-25): retired skills removed
+Scope items (verbatim):
+- Remove the five retired skills (autonomy, communication, continuity, index, laconic) from the plugin; their pointer bodies hold no rules, which live in CORE.md and the role files
+- Plugin docs: version 0.3.1; CHANGELOG lists each scope item verbatim and names the five removed skills; README skill table drops their row
+
+Removed: skills/autonomy, skills/communication, skills/continuity, skills/index, skills/laconic. Each held one pointer line to the rule files (CORE.md, the role files, INDEX.md in Exchange/rules/). Copies are kept in the repo under _archive/excellent-etiquette-0.3.0-retired-skills/. Operator order 11-25 via the secretary (m-37ee2106a9ef): fewer skills loaded at every agent start. Scope A-5f941.
+
 ## 0.3.0 (2026-11-13): rules moved to the rule files
 Scope items (verbatim):
 - Retired skills (communication, autonomy, continuity, laconic, index): each body becomes one pointer line to the rule files; descriptions say they hold no rules; their references are removed
